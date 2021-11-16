@@ -3,15 +3,89 @@
 """
 
 import matplotlib as mpl
+mpl.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import re
 from glob import glob
+import argparse
+import sys
 
 from aetherpy.io import read_routines
 from aetherpy.utils import inputs, time_conversion
 from aetherpy.plot import data_prep, movie_routines
+
+def get_args():
+
+    parser = argparse.ArgumentParser(
+        description = 'Plot Aether / GITM model results')
+    
+    parser.add_argument('-list',  \
+                        action='store_true', default = False, \
+                        help = 'list variables in file')
+
+    parser.add_argument('-timeplot',  \
+                        action='store_true', default = False, \
+                        help = 'Plot integrated (or mean) value vs. time')
+
+    parser.add_argument('-mean',  \
+                        action='store_true', default = False, \
+                        help = 'Plot mean value instead of integrated value')
+    
+    parser.add_argument('-var',  \
+                        default = 3, type = int, \
+                        help = 'variable to plot (number)')
+    parser.add_argument('-cut', metavar = 'cut',  default ='alt', \
+                        choices = ['alt', 'lat', 'lon'], 
+                        help = 'alt,lat,lon : which cut you would like')
+    parser.add_argument('-ext',  default ='png', \
+                        choices = ['png', 'jpg', 'pdf'], 
+                        help = 'plot type file extention')
+    parser.add_argument('-winds', default = False,\
+                        help='overplot winds', \
+                        action="store_true")
+    parser.add_argument('-alt', metavar = 'alt', default =400.0, type = int, \
+                        help = 'altitude :  alt in km (closest)')
+    parser.add_argument('-lat', metavar = 'lat',  default =-100.0, \
+                        help = 'latitude : latitude in degrees (closest)')
+    parser.add_argument('-lon', metavar = 'lon',  default =-100.0,\
+                        help = 'longitude in degrees (closest)')
+    parser.add_argument('-alog',  default = False,
+                        action="store_true",
+                        help = 'plot the log of the variable')
+    parser.add_argument('-IsLog', default =False,
+                        help='plot the log of the variable', 
+                        action="store_true")    
+    parser.add_argument('-diff', default = False, 
+                        action = 'store_true',
+                        help = 'plot difference of files (2 files needed)')
+    parser.add_argument('-mkv',
+                        action = 'store_true',
+                        default = False,
+                        help = 'movie format = mkv')
+    parser.add_argument('-mp4',
+                        action = 'store_true',
+                        default = True,
+                        help = 'movie format = mp4')
+    parser.add_argument('-gif',
+                        action='store_true',
+                        default = False, 
+                        help = 'movie format = gif')
+    parser.add_argument('-movie',  default = False,\
+                        action='store_true',
+                        help = 'Make a movie out of results')
+    parser.add_argument('-tec',  default = False, \
+                        action='store_true',
+                        help = 'plot total electron content (TEC)')
+    parser.add_argument('-rate',  default =30,\
+                        help = 'framerate for movie')
+    parser.add_argument('filelist', nargs='+', \
+                        help = 'list files to use for generating plots')
+    
+    args = parser.parse_args()
+
+    return args
 
 
 # ----------------------------------------------------------------------------
@@ -162,66 +236,93 @@ def get_command_line_args(argv):
     return args
 
 
+def determine_file_type(file):
+
+    IsGitm = False
+    HasHeader = False
+    m = re.match(r'(.*)bin', file)
+    if m:
+        IsGitm = True
+        # check for a header file:
+        checkFile = glob(m.group(1)+"header")
+        if (len(checkFile) > 0):
+            if (len(checkFile[0]) > 1):
+                HasHeader = True
+        if (not HasHeader):
+            # check for a json file:
+            checkFile = glob(m.group(1)+"json")
+            if (len(checkFile) > 0):
+                if (len(checkFile[0]) > 1):
+                    HasHeader = True
+
+    return IsGitm, HasHeader
+
+def fix_vars(vars):
+    newvars = []
+    for v in vars:
+        nv = re.sub('!U', '', v)
+        nv = re.sub('!N', '', nv)
+        nv = re.sub('!D', '', nv)
+        newvars.append(nv)
+
+    return newvars
+
 # ----------------------------------------------------------------------------
 # Define the main plotting routine
 
 def plot_model_results():
+
     # Get the input arguments
-    args = get_command_line_args(inputs.process_command_line_input())
+    args = get_args()
 
-    if len(args['filelist']) == 0:
-        help_str = get_help()
-        print(help_str)
-        return
-
-    IsGitm = args['IsGitm']
-    HasHeader = args['HasHeader']
-
+    # determine what kind of files we are dealing with
+    IsGitm, HasHeader = determine_file_type(args.filelist[0])
+    
     if ((IsGitm) and (not HasHeader)):
-        header = read_routines.read_gitm_headers(args["filelist"], finds = 0)
+        header = read_routines.read_gitm_headers(args.filelist, finds = 0)
     else:
         if (HasHeader):
-            header = read_routines.read_aether_ascii_header(args["filelist"])
+            header = read_routines.read_aether_ascii_header(args.filelist)
             IsGitm = 0
         else:
-            header = read_routines.read_aether_header(args["filelist"])
+            header = read_routines.read_aether_headers(args.filelist)
+
+    header['vars'] = fix_vars(header['vars'])
     
-    ## Read the file header
-    #if args['IsGitm']:
-    #    header = read_routines.read_gitm_headers(args["filelist"])
-    #else:
-    #    files = args["filelist"]
-    #    header = read_routines.read_aether_headers(files)
-
-    # If help is requested for a specific file, return it here
-    if args['help']:
-        help_str = get_help(header['vars'])
-        print(help_str)
-        return
-
-    if args["var"] >= len(header["vars"]):
+    if (args.list):
+        for k, v in header.items():
+            if (k != 'vars'):
+                print(k, '-> ', v)
+            else:
+                print('vars : ')
+                for i, var in enumerate(v):
+                    print(i, var)
+        exit()
+        
+    if (args.var >= len(header["vars"])):
         raise ValueError("requested variable doesn't exist: {:d}>{:d}".format(
-            args["var"], len(header["vars"])))
+            args.var, len(header["vars"])))
 
     # Define the plotting inputs
-    plot_vars = [0, 1, 2, args["var"]]
+    plot_vars = [0, 1, 2, args.var]
 
     # Update plotting variables to include the wind, if desired
-    if args["winds"]:
-        plot_vars.append(16 if args['cut'] in ['alt', 'lat'] else 17)
-        plot_vars.append(18 if args['cut'] in ['lat', 'lon'] else 17)
+    if args.winds:
+        plot_vars.append(16 if args.cut in ['alt', 'lat'] else 17)
+        plot_vars.append(18 if args.cut in ['lat', 'lon'] else 17)
         all_winds_x = []
         all_winds_y = []
 
     # Prepare to load the desired file data
     all_2dim_data = []
     all_times = []
+    all_int_data = []
 
-    for j, filename in enumerate(args['filelist']):
+    for j, filename in enumerate(args.filelist):
         # Read in the data file
         if IsGitm:
             data = read_routines.read_gitm_file(filename, plot_vars)
-            ivar = args["var"]
+            ivar = args.var
         else:
             if j == 0:
                 var_list = []
@@ -229,7 +330,7 @@ def plot_model_results():
                     var_list.append(header["vars"][pvar])
             if (HasHeader):
                 data = read_routines.read_aether_one_binary_file(header, j, plot_vars)
-                ivar = args["var"]
+                ivar = args.var
             else:
                 data = read_routines.read_aether_file(filename, var_list)
                 ivar = 3
@@ -240,33 +341,53 @@ def plot_model_results():
             alts = data[2][0][0] / 1000.0  # Convert from m to km
             lons = np.degrees(data[0][:, 0, 0])  # Convert from rad to deg
             lats = np.degrees(data[1][0, :, 0])  # Convert from rad to deg
-
             # Find the desired index to cut along to get a 2D slice
+            if (args.cut == 'alt'):
+                pos = args.alt
+                if (len(alts) == 1):
+                    print("Only one alt found, setting alt pos = 0");
+                    pos = 0
+                lat2d = data[1][:, :, 0]  # Convert from rad to deg
+                dlon = data[0][1, 0, 0] - data[0][0, 0, 0]
+                dlat = data[1][0, 1, 0] - data[1][0, 0, 0]
+                area = np.cos(lat2d) * dlon * dlat *((6372.0 + 100.0)*1000.0)**2
+                int_area = np.sum(area)
+            if (args.cut == 'lon'):
+                pos = args.lon
+            if (args.cut == 'lat'):
+                pos = args.lat
+                
             icut, cut_data, x_pos, y_pos, z_val = data_prep.get_cut_index(
-                lons, lats, alts, args[args['cut']], args['cut'])
+                lons, lats, alts, pos, args.cut)
 
+        if (args.cut == 'alt'):
+            int_data = data[ivar][cut_data] * area
+            if (args.mean):
+                int_data = int_data / int_area
+            all_int_data.append(np.sum(int_data))
+                
         # Save the time data
         all_times.append(data["time"])
 
         # Save the z-axis data
-        if args["tec"]:
+        if args.tec:
             all_2dim_data.append(data_prep.calc_tec(alts, data[ivar], 2, -4))
         else:
             all_2dim_data.append(data[ivar][cut_data])
 
-            if (args["winds"]):
+            if (args.winds):
                 all_winds_x.append(data[plot_vars[-1]][cut_data])
                 all_winds_y.append(data[plot_vars[-1]][cut_data])
 
     # Convert data list to a numpy array
     all_2dim_data = np.array(all_2dim_data)
-
-    if args["winds"]:
+    
+    if args.winds:
         all_winds_x = np.array(all_winds_x)
         all_winds_y = np.array(all_winds_y)
 
     # If desired, take the log of the data
-    if args['log']:
+    if args.alog:
         all_2dim_data = np.log10(all_2dim_data)
 
     # Define plotting limits
@@ -276,32 +397,33 @@ def plot_model_results():
     maxi = all_2dim_data.max() * 1.01
     mini = all_2dim_data.min() * 0.99
 
-    if mini < 0.0:
+    if ((mini < 0.0) and (not args.alog)):
         symmetric = True
         cmap = mpl.cm.bwr
         maxi = abs(all_2dim_data).max() * 1.05
         mini = -maxi
 
-    if args['cut'] == 'alt':
+    if args.cut == 'alt':
+
         mask_north = ((y_pos >= 40) & (y_pos <= 90.0))
         mask_south = ((y_pos <= -40) & (y_pos >= -90.0))
         plot_north = mask_north.max()
         plot_south = mask_south.max()
 
         if plot_north:
-            maxi_north = abs(all_2dim_data[:, :, mask_north]).max() * 1.05
-
             if symmetric:
+                maxi_north = abs(all_2dim_data[:, :, mask_north]).max() * 1.05
                 mini_north = -maxi_north
             else:
+                maxi_north = all_2dim_data[:, :, mask_north].max() * 1.05
                 mini_north = all_2dim_data[:, :, mask_north].min() * 0.95
 
         if plot_south:
-            maxi_south = abs(all_2dim_data[:, :, mask_south]).max() * 1.05
-
             if symmetric:
+                maxi_south = abs(all_2dim_data[:, :, mask_south]).max() * 1.05
                 mini_south = -maxi_south
             else:
+                maxi_south = all_2dim_data[:, :, mask_south].max() * 1.05
                 mini_south = all_2dim_data[:, :, mask_south].min() * 0.95
 
     # Define plot range
@@ -311,12 +433,12 @@ def plot_model_results():
     maxy = (y_pos[-2] + y_pos[-3]) / 2.0
 
     # Prepare the output filename
-    filename = "var{:02d}_{:s}{:03d}".format(args["var"], args['cut'], icut)
+    filename = "var{:02d}_{:s}{:03d}".format(args.var, args.cut, icut)
 
-    if args['movie'] > 0:
+    if args.movie > 0:
         img_file_fmt = movie_routines.setup_movie_dir(filename)
     else:
-        img_file_fmt = filename+'_{:}.'+args['ext']
+        img_file_fmt = filename+'_{:}.'+args.ext
 
     # Create a plot for each time
     for itime, utime in enumerate(all_times):
@@ -340,7 +462,7 @@ def plot_model_results():
                         vmin=mini, vmax=maxi, cmap=cmap, shading='auto')
 
         # Add the winds, if desired
-        if args["winds"]:
+        if args.winds:
             ax.quiver(x_pos, y_pos, all_winds_x[itime].transpose(),
                       all_winds_y[itime].transpose())
         ax.set_ylim([miny, maxy])
@@ -348,21 +470,21 @@ def plot_model_results():
 
         # Set the labels and aspect ratio
         ax.set_title("{:s}; {:s}: {:.2f} {:s}".format(
-            utime.strftime("%d %b %Y %H:%M:%S UT"), args['cut'], z_val,
-            'km' if args['cut'] == 'alt' else r'$^\circ$'))
-        ax.set_xlabel(r'Latitude ($^\circ$)' if args['cut'] == 'lon'
+            utime.strftime("%d %b %Y %H:%M:%S UT"), args.cut, z_val,
+            'km' if args.cut == 'alt' else r'$^\circ$'))
+        ax.set_xlabel(r'Latitude ($^\circ$)' if args.cut == 'lon'
                       else r'Longitude ($^\circ$)')
-        ax.set_ylabel(r'Latitude ($^\circ$)' if args['cut'] == 'alt'
+        ax.set_ylabel(r'Latitude ($^\circ$)' if args.cut == 'alt'
                       else r'Altitude (km)')
-        if args['cut'] == 'alt':
+        if args.cut == 'alt':
             ax.set_aspect(1.0)
 
         # Set the colorbar
         cbar = fig.colorbar(con, ax=ax, shrink=0.75, pad=0.02)
-        cbar.set_label(header["vars"][args["var"]], rotation=90)
+        cbar.set_label(header["vars"][args.var], rotation=90)
 
         # If this is an altitude slice, add polar dials
-        if args['cut'] == 'alt' and (plot_north or plot_south):
+        if args.cut == 'alt' and (plot_north or plot_south):
             # Set the common inputs
             shift = time_conversion.calc_time_shift(utime)
 
@@ -441,8 +563,10 @@ def plot_model_results():
                 fig.colorbar(cons, ax=ax3, shrink=0.5, pad=0.01)
 
         # Format the output filename
-        fmt_input = itime if args['movie'] > 0 else utime.strftime(
-            '%y%m%d_%H%M%S')
+        if args.movie > 0:
+            fmt_input = itime
+        else:
+            fmt_input = utime.strftime('%y%m%d_%H%M%S')
         outfile = img_file_fmt.format(fmt_input)
 
         # Save the output file
@@ -451,10 +575,32 @@ def plot_model_results():
         plt.close(fig)
 
     # Create a movie, if desired
-    if args['movie'] > 0:
-        movie_routines.save_movie(filename, ext=args['ext'],
-                                  rate=args['movie'])
+    if args.movie > 0:
+        movie_routines.save_movie(filename, ext=args.ext,
+                                  rate=args.rate)
 
+    if (args.timeplot):
+        fig = plt.figure(figsize=(10, 8.5))
+        ax = fig.add_subplot(111)
+        ax.plot(all_times, all_int_data)
+
+        start = all_times[0].strftime('%b %d, %Y %H:%M')
+        end = all_times[-1].strftime('%b %d, %Y %H:%M')
+        ax.set_xlabel(start + ' to ' + end)
+        if (args.mean):
+            type = 'mean'
+        else:
+            type = 'integral'
+        ax.set_ylabel('Global '+type+' (' + header["vars"][args.var] + ')')
+
+        title = 'Global '+type+' of ' + header["vars"][args.var]
+        title = title + ' at {:.2f} km'.format(z_val)
+        ax.set_title(title)
+        
+        stime = all_times[0].strftime('%y%m%d')
+        fig.savefig(filename+'_'+stime+'.'+args.ext)
+
+        
     return
 
 
