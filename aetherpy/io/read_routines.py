@@ -9,6 +9,8 @@ from netCDF4 import Dataset
 import numpy as np
 from struct import unpack
 import re
+from glob import glob
+import json
 
 from aetherpy.utils.time_conversion import epoch_to_datetime
 
@@ -134,50 +136,84 @@ def read_aether_ascii_header(filelist):
 
     for file in filelist:
         
+        # This sorts out whether the header is an SWMF-style header, or a json file:
         header["filename"].append(file)
         l = file.find(".bin")
-        file = file[0:l]+".header"
-        fpin = open(file, 'r')
+        headerFile = file[0:l]+".header"
+        checkFile = glob(headerFile)
+        IsJson = True
+        if (len(checkFile) > 0):
+            if (len(checkFile[0]) > 1):
+                IsJson = False
+        if (IsJson):
+            # Verify that we have a json file:
+            headerFile = file[0:l]+".json"
+            checkFile = glob(headerFile)
+            if (len(checkFile) > 0):
+                if (len(checkFile[0]) > 1):
+                    # It really is a json file!
+                    with open(headerFile, 'r') as jsonFile:
+                        data = jsonFile.read()
+                        obj = json.loads(data)
+                        header["nVars"] = obj["nVars"]
+                        header["nLons"] = obj["nLons"]
+                        header["nLats"] = obj["nLats"]
+                        header["nAlts"] = obj["nAlts"]
+                        header["version"] = obj["version"]
+                        header["time"].append(dt.datetime(obj["time"][0],
+                                                          obj["time"][1],
+                                                          obj["time"][2],
+                                                          obj["time"][3],
+                                                          obj["time"][4],
+                                                          obj["time"][5],
+                                                          obj["time"][6]))
+                        if (len(header["vars"]) < 1):
+                            for i in range(header["nVars"]):
+                                header["vars"].append(obj["variables"][i] + " (" +
+                                                      obj["units"][i] + ")")
 
-        for line in fpin:
+        else:
 
-            m = re.match(r'BLOCKS',line)
-            if m:
-                header["nBlocksLons"] = int(fpin.readline())
-                header["nBlocksLats"] = int(fpin.readline())
-                header["nBlocksAlts"] = int(fpin.readline())
+            fpin = open(headerFile, 'r')
+
+            for line in fpin:
+
+                m = re.match(r'BLOCKS',line)
+                if m:
+                    header["nBlocksLons"] = int(fpin.readline())
+                    header["nBlocksLats"] = int(fpin.readline())
+                    header["nBlocksAlts"] = int(fpin.readline())
             
-            m = re.match(r'NUMERICAL',line)
-            if m:
-                header["nVars"], s = parse_line_into_int_and_string(fpin.readline())
-                header["nLons"], s = parse_line_into_int_and_string(fpin.readline())
-                header["nLats"], s = parse_line_into_int_and_string(fpin.readline())
-                header["nAlts"], s = parse_line_into_int_and_string(fpin.readline())
+                m = re.match(r'NUMERICAL',line)
+                if m:
+                    header["nVars"], s = parse_line_into_int_and_string(fpin.readline())
+                    header["nLons"], s = parse_line_into_int_and_string(fpin.readline())
+                    header["nLats"], s = parse_line_into_int_and_string(fpin.readline())
+                    header["nAlts"], s = parse_line_into_int_and_string(fpin.readline())
 
-            m = re.match(r'VERSION',line)
-            if m:
-                header["version"] = float(fpin.readline())
+                m = re.match(r'VERSION',line)
+                if m:
+                    header["version"] = float(fpin.readline())
 
-            m = re.match(r'TIME',line)
-            if m:
-                year = int(fpin.readline())
-                month = int(fpin.readline())
-                day = int(fpin.readline())
-                hour = int(fpin.readline())
-                minute = int(fpin.readline())
-                second = int(fpin.readline())
-                msec = int(fpin.readline())
-                header["time"].append(dt.datetime(year, month, day, \
-                                                  hour, minute, second, msec))
+                m = re.match(r'TIME',line)
+                if m:
+                    year = int(fpin.readline())
+                    month = int(fpin.readline())
+                    day = int(fpin.readline())
+                    hour = int(fpin.readline())
+                    minute = int(fpin.readline())
+                    second = int(fpin.readline())
+                    msec = int(fpin.readline())
+                    header["time"].append(dt.datetime(year, month, day, \
+                                                      hour, minute, second, msec))
 
-            m = re.match(r'VARIABLE',line)
-            if ((m) and (len(header["vars"]) < 1)):
-                for i in range(header["nVars"]):
-                    n, s = parse_line_into_int_and_string(fpin.readline())
-                    header["vars"].append(s.strip())
-
-            
-        fpin.close()
+                m = re.match(r'VARIABLE',line)
+                if ((m) and (len(header["vars"]) < 1)):
+                    for i in range(header["nVars"]):
+                        n, s = parse_line_into_int_and_string(fpin.readline())
+                        header["vars"].append(s.strip())
+           
+            fpin.close()
 
     return header
     
