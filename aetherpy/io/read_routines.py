@@ -14,6 +14,21 @@ from aetherpy.utils.time_conversion import epoch_to_datetime
 from aetherpy import logger
 
 
+class DataArray(np.ndarray):
+    def __new__(cls, input_array, attrs={}):
+        obj = np.asarray(input_array).view(cls)
+        obj.attrs = attrs
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None:
+            return
+        self.attrs = getattr(obj, 'attrs', {
+            'units': None,
+            'long_name': None
+        })
+
+
 def parse_line_into_int_and_string(line, parse_string=True):
     """Parse a data string into integer and string components.
 
@@ -321,6 +336,7 @@ def read_blocked_netcdf_file(filename, file_vars=None):
     # NOTE: Includes header information for easy access until
     #       updated package structure is confirmed
     # Initialize data dict with defaults (will remove these defaults later)
+    # TODO: Remove units and long_name when interface has been changed
     data = {'filename': filename,
             'units': '',
             'long_name': None}
@@ -337,14 +353,9 @@ def read_blocked_netcdf_file(filename, file_vars=None):
                         if file_vars is None or var in file_vars]
 
         # Fetch requested variable data
-        for var in data['vars']:
-            data[var] = np.array(ncfile.variables[var])  # key is var name
-
-        # TODO: Fetch all attribute data
-        #       Will either implement this by attaching metadata to ndarray
-        #       (metadata or subclassing) OR map variable names to dicts
-        #       containing data ndarray and attributes
-        #       When this is complete, remove 'units' and 'long_name'
+        for key in data['vars']:
+            var = ncfile.variables[key]  # key is var name
+            data[key] = DataArray(np.array(var), var.__dict__)
 
         data['time'] = epoch_to_datetime(np.array(ncfile.variables['time'])[0])
 
