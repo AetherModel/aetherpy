@@ -216,7 +216,8 @@ def extract_block_data(data, block_index):
 
 # TODO: Remove block_index argument when bandaid fix is removed
 def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
-                    mini, maxi, block_index, debug_filename=None):
+                    mini, maxi, block_index, split_block=False,
+                    debug_filename=None):
     # Extract plotting data
     lons = block_data['lon'][2:-2, 2:-2, 0]
     lats = block_data['lat'][2:-2, 2:-2, 0]
@@ -230,12 +231,14 @@ def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
     # Plot data on each Axes instance in axList
     for ax in ax_list:
         # TODO: Need to generalize this -- bandaid fix for cubesphere
-        if block_index in [4, 5]:
+        if split_block:
+            x_mid = int(lons.shape[0] / 2)
+            y_mid = int(lons.shape[1] / 2)
             tmpslices = [
-                np.s_[:20, :20],
-                np.s_[:20, 20:],
-                np.s_[20:, 20:],
-                np.s_[20:, :20]
+                np.s_[:x_mid, :y_mid],
+                np.s_[:x_mid, y_mid:],
+                np.s_[x_mid:, y_mid:],
+                np.s_[x_mid:, :y_mid]
             ]
             for tmpslice in tmpslices:
                 t_lons = lons[tmpslice]
@@ -249,11 +252,140 @@ def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
         else:
             ax.pcolor(lons, lats, v, vmin=mini, vmax=maxi,
                       cmap=cmap, transform=ccrs.PlateCarree())
-        # Step by step debug file generation
-        if debug_filename:
-            fname = f"{debug_filename}_block{block_index}"
-            print(f"  Outputting file: {fname}.png")
-            fig.savefig(fname, bbox_inches='tight')
+    # Step by step debug file generation
+    if debug_filename:
+        fname = f"{debug_filename}_block{block_index}"
+        print(f"  Outputting file: {fname}.png")
+        fig.savefig(fname, bbox_inches='tight')
+
+
+def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
+    # Initialize colorbar information
+    mini, maxi = get_plotting_bounds(
+        all_block_data, var_to_plot, alt_to_plot)
+    norm = colors.Normalize(vmin=mini, vmax=maxi)
+    cmap = cm.plasma if mini >= 0 else cm.bwr
+    col = 'white' if mini >= 0 else 'black'
+
+    # Initialize figure to plot on
+    fig = plt.figure(figsize=(11, 10), constrained_layout=True)
+    altitude = round(
+        all_block_data[0]['z'][0, 0, alt_to_plot] / 1000.0, 2)
+    time = all_block_data[0]['time']
+    title = f"{time}; var: {var_to_plot}; alt: {altitude} km"
+
+    # Calculate circle plot rotations to place sun at top
+    hours = time.hour + time.minute / 60 + time.second / 3600
+    north_longitude = -15 * hours
+    south_longitude = 180 - 15 * hours
+
+    # Define subplot projections and gridspecs, create subplots
+    world_proj = ccrs.PlateCarree(central_longitude=0)
+    north_proj = ccrs.Orthographic(
+        central_latitude=90, central_longitude=north_longitude)
+    south_proj = ccrs.Orthographic(
+        central_latitude=-90, central_longitude=south_longitude)
+
+    # Create subplots
+    gs = fig.add_gridspec(nrows=2, ncols=2, hspace=-0.2)
+
+    north_ax = fig.add_subplot(gs[0, 0], projection=north_proj)
+    south_ax = fig.add_subplot(gs[0, 1], projection=south_proj)
+    world_ax = fig.add_subplot(gs[1, :], projection=world_proj)
+    world_ax.title.set_text(title)
+
+    ax_list = [north_ax, south_ax, world_ax]
+
+    # Set subplot extents
+    world_ax.set_global()
+
+    # Limit latitudes of circle plots to >45 degrees N/S
+    border_latitude = 45
+    r_limit, _ = north_proj.transform_point(90, border_latitude,
+                                            ccrs.PlateCarree())
+    r_limit = abs(r_limit)
+    r_extent = r_limit * 1.00001
+    circle_bound = mpath.Path.unit_circle()
+    circle_bound = mpath.Path(
+        circle_bound.vertices.copy() * r_limit, circle_bound.codes.copy())
+    for ax in [north_ax, south_ax]:
+        ax.set_xlim(-r_extent, r_extent)
+        ax.set_ylim(-r_extent, r_extent)
+        ax.set_boundary(circle_bound)
+
+    # Plot all block data on figure
+    for i, block_data in enumerate(all_block_data):
+        print(f"  Computing block {i}")
+        split_block = len(all_block_data) == 6 and i in [4, 5]
+        plot_block_data(block_data, var_to_plot, alt_to_plot, fig,
+                        ax_list, mini, maxi, i, split_block)
+
+    # Add elements affecting all subplots
+    for ax in ax_list:
+        ax.coastlines(color=col)
+
+    # Configure colorbar
+    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap),
+                        ax=ax_list, shrink=0.5, pad=0.01)
+    power = int(np.log10(max(maxi, 1)))
+    cbar.formatter.set_useMathText(True)
+    cbar.ax.yaxis.get_offset_text().set_rotation('vertical')
+    cbar_label = f"{var_to_plot} (x$10^{{{power}}} / $m$^3$)"
+    cbar.set_label(cbar_label, rotation='vertical')
+    cbar.formatter.set_powerlimits((0, 0))
+
+    # Add labels to circle plots
+    north_minmax = determine_min_max_within_range(
+        all_block_data, var_to_plot, alt_to_plot,
+        min_lat=45, max_lat=90
+    )
+    south_minmax = determine_min_max_within_range(
+        all_block_data, var_to_plot, alt_to_plot,
+        min_lat=-90, max_lat=-45
+    )
+    label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
+
+    # Save plot
+    print(f"Outputting file: {plot_filename}.png")
+    fig.savefig(plot_filename, bbox_inches='tight')
+    plt.close(fig)
+
+
+def label_circle_plots(north_ax, south_ax, north_min, north_max,
+                       south_min, south_max):
+    # Add local time labels to circle plots
+    north_kwargs = {
+        'horizontalalignment': 'center',
+        'verticalalignment': 'center',
+        'fontsize': 'small',
+        'transform': north_ax.transAxes
+    }
+    south_kwargs = {
+        'horizontalalignment': 'center',
+        'verticalalignment': 'center',
+        'fontsize': 'small',
+        'transform': south_ax.transAxes
+    }
+
+    north_ax.text(0.5, -0.03, '00', **north_kwargs)     # Bottom
+    north_ax.text(1.03, 0.5, '06', **north_kwargs)      # Right
+    north_ax.text(0.5, 1.03, '12', **north_kwargs)      # Top
+    north_ax.text(-0.03, 0.5, '18', **north_kwargs)     # Left
+
+    south_ax.text(0.5, -0.03, '00', **south_kwargs)     # Bottom
+    south_ax.text(-0.03, 0.5, '06', **south_kwargs)     # Left
+    south_ax.text(0.5, 1.03, '12', **south_kwargs)      # Top
+    south_ax.text(1.03, 0.5, '18', **south_kwargs)      # Right
+
+    # Add min/max labels to circle plots
+    north_mintext = f"Min: {north_min:.3e}".replace('+', '')
+    north_maxtext = f"Max: {north_max:.3e}".replace('+', '')
+    south_mintext = f"Min: {south_min:.3e}".replace('+', '')
+    south_maxtext = f"Max: {south_max:.3e}".replace('+', '')
+    north_ax.text(0.125, 0.125, north_mintext, **north_kwargs, rotation=-45)
+    north_ax.text(0.875, 0.125, north_maxtext, **north_kwargs, rotation=45)
+    south_ax.text(0.125, 0.125, south_mintext, **south_kwargs, rotation=-45)
+    south_ax.text(0.875, 0.125, south_maxtext, **south_kwargs, rotation=45)
 
 
 def plot_model_block_results():
@@ -279,11 +411,11 @@ def plot_model_block_results():
         # Retrieve all block data
         data = read_routines.read_blocked_netcdf_file(filename, file_vars)
         all_block_data = []
-        for i in range(header['nblocks']):
+        for i in range(data['nblocks']):
             block_data = extract_block_data(data, i)
             all_block_data.append(block_data)
 
-        # Decide which variables to plot
+        # Plot desired variable if given, plot all variables if not
         all_vars = [v for v in data['vars']
                     if v not in ['time', 'lon', 'lat', 'z']]
         plot_vars = [args['var']] if args['var'] else all_vars
@@ -292,126 +424,8 @@ def plot_model_block_results():
         for var_to_plot in plot_vars:
             print(f"Plotting variable: {var_to_plot}")
             plot_filename = f"{filename.split('.')[0]}_{var_to_plot}"
-
-            # Initialize colorbar information
-            mini, maxi = get_plotting_bounds(
-                all_block_data, var_to_plot, alt_to_plot)
-            norm = colors.Normalize(vmin=mini, vmax=maxi)
-            cmap = cm.plasma if mini >= 0 else cm.bwr
-            col = 'white' if mini >= 0 else 'black'
-
-            # Initialize figure to plot on
-            fig = plt.figure(figsize=(11, 10), constrained_layout=True)
-            altitude = round(
-                all_block_data[0]['z'][0, 0, alt_to_plot] / 1000.0, 2)
-            time = all_block_data[0]['time']
-            title = f"{time}; var: {var_to_plot}; alt: {altitude} km"
-
-            # Rotate circle plots to place sun at top
-            hours = time.hour + time.minute / 60 + time.second / 3600
-            north_longitude = -15 * hours
-            south_longitude = 180 - 15 * hours
-
-            # Define subplot projections and gridspecs, create subplots
-            world_proj = ccrs.PlateCarree(central_longitude=0)
-            north_proj = ccrs.Orthographic(central_latitude=90,
-                                           central_longitude=north_longitude)
-            south_proj = ccrs.Orthographic(central_latitude=-90,
-                                           central_longitude=south_longitude)
-
-            gs = fig.add_gridspec(nrows=2, ncols=2, hspace=-0.2)
-
-            north_ax = fig.add_subplot(gs[0, 0], projection=north_proj)
-            south_ax = fig.add_subplot(gs[0, 1], projection=south_proj)
-            world_ax = fig.add_subplot(gs[1, :], projection=world_proj)
-            world_ax.title.set_text(title)
-
-            ax_list = [north_ax, south_ax, world_ax]
-
-            # Plot all block data on figure
-            for i, block_data in enumerate(all_block_data):
-                print(f"  Computing block {i}")
-                plot_block_data(block_data, var_to_plot, alt_to_plot, fig,
-                                ax_list, mini, maxi, i, plot_filename)
-
-            # Add elements affecting all subplots
-            for ax in ax_list:
-                ax.coastlines(color=col)
-
-            # Configure colorbar
-            cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap),
-                                ax=ax_list, shrink=0.5, pad=0.01)
-            power = int(np.log10(max(maxi, 1)))
-            cbar.formatter.set_useMathText(True)
-            cbar.ax.yaxis.get_offset_text().set_rotation('vertical')
-            cbar_label = f"{var_to_plot} (x$10^{{{power}}} / $m$^3$)"
-            cbar.set_label(cbar_label, rotation='vertical')
-            cbar.formatter.set_powerlimits((0, 0))
-
-            # Add local time labels to circle plots
-            north_kwargs = {
-                'horizontalalignment': 'center',
-                'verticalalignment': 'center',
-                'fontsize': 'small',
-                'transform': north_ax.transAxes
-            }
-            south_kwargs = {
-                'horizontalalignment': 'center',
-                'verticalalignment': 'center',
-                'fontsize': 'small',
-                'transform': south_ax.transAxes
-            }
-
-            north_ax.text(0.5, -0.03, '00', **north_kwargs)     # Bottom
-            north_ax.text(1.03, 0.5, '06', **north_kwargs)      # Right
-            north_ax.text(0.5, 1.03, '12', **north_kwargs)      # Top
-            north_ax.text(-0.03, 0.5, '18', **north_kwargs)     # Left
-
-            south_ax.text(0.5, -0.03, '00', **south_kwargs)     # Bottom
-            south_ax.text(-0.03, 0.5, '06', **south_kwargs)     # Left
-            south_ax.text(0.5, 1.03, '12', **south_kwargs)      # Top
-            south_ax.text(1.03, 0.5, '18', **south_kwargs)      # Right
-
-            # Add min/max to circle plots
-            north_min, north_max = determine_min_max_within_range(
-                all_block_data, var_to_plot, alt_to_plot,
-                min_lat=45, max_lat=90
-            )
-            south_min, south_max = determine_min_max_within_range(
-                all_block_data, var_to_plot, alt_to_plot,
-                min_lat=-90, max_lat=-45
-            )
-            north_mintext = f"Min: {north_min:.3e}".replace('+', '')
-            north_maxtext = f"Max: {north_max:.3e}".replace('+', '')
-            south_mintext = f"Min: {south_min:.3e}".replace('+', '')
-            south_maxtext = f"Max: {south_max:.3e}".replace('+', '')
-            north_ax.text(0.125, 0.125, north_mintext,
-                          **north_kwargs, rotation=-45)
-            north_ax.text(0.875, 0.125, north_maxtext,
-                          **north_kwargs, rotation=45)
-            south_ax.text(0.125, 0.125, south_mintext,
-                          **south_kwargs, rotation=-45)
-            south_ax.text(0.875, 0.125, south_maxtext,
-                          **south_kwargs, rotation=45)
-
-            # Limit latitudes of circle plots to >45 degrees N/S
-            border_latitude = 45
-            r_limit, _ = north_proj.transform_point(90, border_latitude,
-                                                    ccrs.PlateCarree())
-            r_limit = abs(r_limit)
-            r_extent = r_limit * 1.00001
-            circle_bound = mpath.Path.unit_circle()
-            circle_bound = mpath.Path(circle_bound.vertices.copy() * r_limit,
-                                      circle_bound.codes.copy())
-            for ax in [north_ax, south_ax]:
-                ax.set_xlim(-r_extent, r_extent)
-                ax.set_ylim(-r_extent, r_extent)
-                ax.set_boundary(circle_bound)
-
-            # Save plot
-            print(f"Outputting file: {plot_filename}.png")
-            fig.savefig(plot_filename, bbox_inches='tight')
-            plt.close(fig)
+            plot_all_blocks(
+                all_block_data, var_to_plot, alt_to_plot, plot_filename)
 
 
 # Needed to run main script as the default executable from the command line
