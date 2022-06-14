@@ -424,6 +424,8 @@ def plot_with_corners(ax, lons, lats, v, split_block, **kwargs):
 
 
 def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
+    print(f"  Plotting variable: {var_to_plot}")
+
     # Initialize colorbar information
     mini, maxi = get_plotting_bounds(
         all_block_data, var_to_plot, alt_to_plot)
@@ -464,22 +466,11 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
     world_ax.set_global()
 
     # Limit latitudes of circle plots to >45 degrees N/S
-    border_latitude = 45
-    r_limit, _ = north_proj.transform_point(90, border_latitude,
-                                            ccrs.PlateCarree())
-    r_limit = abs(r_limit)
-    r_extent = r_limit * 1.00001
-    circle_bound = mpath.Path.unit_circle()
-    circle_bound = mpath.Path(
-        circle_bound.vertices.copy() * r_limit, circle_bound.codes.copy())
-    for ax in [north_ax, south_ax]:
-        ax.set_xlim(-r_extent, r_extent)
-        ax.set_ylim(-r_extent, r_extent)
-        ax.set_boundary(circle_bound)
+    set_circle_plot_bounds([north_ax, south_ax], north_proj, 45)
 
     # Plot all block data on figure
     for i, block_data in enumerate(all_block_data):
-        print(f"  Computing block {i}")
+        print(f"    Computing block {i}")
         split_block = len(all_block_data) == 6 and i in [4, 5]
         plot_block_data(block_data, var_to_plot, alt_to_plot, fig,
                         ax_list, mini, maxi, split_block)
@@ -504,9 +495,24 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
     label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
 
     # Save plot
-    print(f"Outputting file: {plot_filename}.png")
+    print(f"  Saving plot to: {plot_filename}.png")
     fig.savefig(plot_filename, bbox_inches='tight')
     plt.close(fig)
+
+
+def set_circle_plot_bounds(circle_ax_list, circle_proj, border_latitude):
+    border_latitude = abs(border_latitude)
+    r_limit = abs(circle_proj.transform_point(
+        90, border_latitude, ccrs.PlateCarree())[0]
+    )
+    r_extent = r_limit * 1.0001
+    circle_bound = mpath.Path.unit_circle()
+    circle_bound = mpath.Path(
+        circle_bound.vertices.copy() * r_limit, circle_bound.codes.copy())
+    for ax in circle_ax_list:
+        ax.set_xlim(-r_extent, r_extent)
+        ax.set_ylim(-r_extent, r_extent)
+        ax.set_boundary(circle_bound)
 
 
 def label_circle_plots(north_ax, south_ax, north_min, north_max,
@@ -574,14 +580,16 @@ def plot_model_block_results():
     alt_to_plot = args['alt']
     file_vars = ['lon', 'lat', 'z', args['var']] if args['var'] else None
 
-    # Generate plots for each file
+    # Read each file's data
+    file_data = {}
     for filename in args['filelist']:
         # Retrieve all block data
         data = read_routines.read_blocked_netcdf_file(filename, file_vars)
 
         # Search for compatible 3DCOR files, add to data if found
         filename_list = filename.split('/')[:-1]
-        searchstr = f"{'/'.join(filename_list)}/3DCOR*.nc"
+        searchdir = '.' if len(filename_list) == 0 else '/'.join(filename_list)
+        searchstr = f"{searchdir}/3DCOR*.nc"
         corner_files = glob(searchstr)
         for f in corner_files:
             corner_data = read_routines.read_aether_file(f)
@@ -601,7 +609,11 @@ def plot_model_block_results():
                 data['COR_lat'] = corner_data[2]
                 data['COR_z'] = corner_data[3]
                 break
+        file_data[filename] = data
 
+    # Generate plots for each file
+    for filename, data in file_data.items():
+        print(f"Currently plotting: {filename}")
         # Separate data dict into all_block_data list of dicts
         all_block_data = []
         for i in range(data['nblocks']):
@@ -610,12 +622,12 @@ def plot_model_block_results():
 
         # Plot desired variable if given, plot all variables if not
         all_vars = [v for v in data['vars']
-                    if v not in ['time', 'lon', 'lat', 'z']]
+                    if v not in ['time', 'lon', 'lat', 'z',
+                                 'COR_lon', 'COR_lat', 'COR_z']]
         plot_vars = [args['var']] if args['var'] else all_vars
 
         # Generate plots for each variable requested
         for var_to_plot in plot_vars:
-            print(f"Plotting variable: {var_to_plot}")
             plot_filename = f"{filename.split('.')[0]}_{var_to_plot}"
             plot_all_blocks(
                 all_block_data, var_to_plot, alt_to_plot, plot_filename)
