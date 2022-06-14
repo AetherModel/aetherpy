@@ -207,21 +207,23 @@ def extract_block_data(data, block_index):
         'vars': data['vars'],
         'time': data['time']
     }
-    for var in [v for v in data['vars'] if v != 'time']:
-        block_data[var] = data[var][block_index]
+    for k, v in data.items():
+        if hasattr(v, 'shape'):
+            block_data[k] = v[block_index]
     return block_data
 
 # ----------------------------------------------------------------------------
 # Define the main plotting routines
 
 
-# TODO: Remove block_index argument when bandaid fix is removed
 def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
-                    mini, maxi, block_index, split_block=False,
-                    debug_filename=None):
+                    mini, maxi, split_block=False,
+                    debug_filename=None, debug_blockindex=None):
     # Extract plotting data
-    lons = block_data['lon'][2:-2, 2:-2, alt_to_plot]
-    lats = block_data['lat'][2:-2, 2:-2, alt_to_plot]
+    lonkey = 'COR_lon' if 'COR_lon' in block_data.keys() else 'lon'
+    latkey = 'COR_lat' if 'COR_lat' in block_data.keys() else 'lat'
+    lons = block_data[lonkey][2:-2, 2:-2, alt_to_plot]
+    lats = block_data[latkey][2:-2, 2:-2, alt_to_plot]
     v = block_data[var_to_plot][2:-2, 2:-2, alt_to_plot]
     lons = np.unwrap(
         np.unwrap(lons, period=360, axis=0),
@@ -234,20 +236,100 @@ def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
         'cmap': cmap,
         'transform': ccrs.PlateCarree()
     }
+    use_centers = (lons.shape == v.shape)
 
     # Plot data on each Axes instance in axList
     for ax in ax_list:
-        use_cell_centers = (lons.shape == v.shape)
-        if use_cell_centers:
-            plot_with_centers(ax, lons, lats, v, split_block, **plot_kwargs)
-        else:
-            plot_with_corners(ax, lons, lats, v, split_block, **plot_kwargs)
+        plot_on_ax(ax, lons, lats, v, split_block, use_centers, **plot_kwargs)
 
     # Step by step debug file generation
-    if debug_filename:
-        fname = f"{debug_filename}_block{block_index}"
+    if debug_filename and debug_blockindex:
+        fname = f"{debug_filename}_block{debug_blockindex}"
         print(f"  Outputting file: {fname}.png")
         fig.savefig(fname, bbox_inches='tight')
+
+
+def plot_on_ax(ax, lons, lats, v, split_block, use_centers, **kwargs):
+    # Block doesn't cover pole
+    if not split_block:
+        ax.pcolor(lons, lats, v, **kwargs)
+        return
+    # Block does cover pole -- slice
+    x_mid = int(lons.shape[0] / 2)
+    y_mid = int(lons.shape[1] / 2)
+    corner_offset = 0 if use_centers else 1
+    coordslices = [
+        np.s_[:x_mid + corner_offset, :y_mid + corner_offset],
+        np.s_[:x_mid + corner_offset, y_mid:],
+        np.s_[x_mid:, y_mid:],
+        np.s_[x_mid:, :y_mid + corner_offset]
+    ]
+    valslices = [
+        np.s_[:x_mid, :y_mid],
+        np.s_[:x_mid, y_mid:],
+        np.s_[x_mid:, y_mid:],
+        np.s_[x_mid:, :y_mid]
+    ]
+    for cslice, vslice in zip(coordslices, valslices):
+        # Get temp slices of coords and values
+        t_lons = lons[cslice]
+        t_lats = lats[cslice]
+        t_v = v[vslice]
+        # Fix slices
+        if not use_centers:
+            t_lons = fix_pole_corner_longitude(t_lons, t_lats)
+        t_lons = np.unwrap(
+            np.unwrap(t_lons, period=360, axis=0), period=360, axis=1
+        )
+        # Plot slices, fix plots
+        coll = ax.pcolor(t_lons, t_lats, t_v, **kwargs)
+        if not use_centers:
+            patch = get_pole_corner_patch(coll)
+            ax.add_patch(patch)
+
+
+def fix_pole_corner_longitude(t_lons, t_lats):
+    corners = [
+        np.s_[0, 0],
+        np.s_[0, -1],
+        np.s_[-1, -1],
+        np.s_[-1, 0]
+    ]
+    minlati = 0
+    minlat = np.inf
+    polelon = 0
+    for i, corner in enumerate(corners):
+        if abs(t_lats[corner]) < minlat:
+            minlat = abs(t_lats[corner])
+            minlati = i
+    polelon = t_lons[corners[minlati]]
+    polecorner = corners[(minlati + 2) % 4]
+    t_lons[polecorner] = polelon
+    return t_lons
+
+
+def get_pole_corner_patch(coll):
+    pole_i, pole_path = [
+        (i, path) for i, path in enumerate(coll.get_paths())
+        if 90 in abs(path.vertices[:, 1])][0]
+    poly = pole_path.to_polygons()[0]
+    # Insert point after first pole point
+    for i, row in enumerate(poly):
+        if row[1] in [90, -90]:
+            polepoint = row
+            poly = np.insert(poly, i + 1,
+                             [[poly[i + 1, 0], row[1]]], axis=0)
+            break
+    # Insert point before last pole point
+    for i, row in reversed(list(enumerate(poly))):
+        if np.array_equal(row, polepoint):
+            poly = np.insert(poly, i,
+                             [[poly[i - 1, 0], row[1]]], axis=0)
+            break
+    coll.update_scalarmappable()
+    patch = mpatches.Polygon(poly, transform=ccrs.PlateCarree(),
+                             color=coll.get_facecolors()[pole_i])
+    return patch
 
 
 # TODO: Streamline code/logic duplication
@@ -279,15 +361,15 @@ def plot_with_corners(ax, lons, lats, v, split_block, **kwargs):
         y_mid = int(lons.shape[1] / 2)
         coordslices = [
             np.s_[:x_mid + 1, :y_mid + 1],
-            np.s_[x_mid:, :y_mid + 1],
+            np.s_[:x_mid + 1, y_mid:],
             np.s_[x_mid:, y_mid:],
-            np.s_[:x_mid + 1, y_mid:]
+            np.s_[x_mid:, :y_mid + 1]
         ]
         valslices = [
             np.s_[:x_mid, :y_mid],
-            np.s_[x_mid:, :y_mid],
+            np.s_[:x_mid, y_mid:],
             np.s_[x_mid:, y_mid:],
-            np.s_[:x_mid, y_mid:]
+            np.s_[x_mid:, :y_mid]
         ]
         for cslice, vslice in zip(coordslices, valslices):
             t_lons = lons[cslice]
@@ -362,11 +444,11 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
     south_longitude = 180 - 15 * hours
 
     # Define subplot projections and gridspecs, create subplots
-    world_proj = ccrs.PlateCarree(central_longitude=0)
     north_proj = ccrs.Stereographic(
         central_latitude=90, central_longitude=north_longitude)
     south_proj = ccrs.Stereographic(
         central_latitude=-90, central_longitude=south_longitude)
+    world_proj = ccrs.PlateCarree(central_longitude=0)
 
     # Create subplots
     gs = fig.add_gridspec(nrows=2, ncols=2, hspace=-0.2)
@@ -400,21 +482,15 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
         print(f"  Computing block {i}")
         split_block = len(all_block_data) == 6 and i in [4, 5]
         plot_block_data(block_data, var_to_plot, alt_to_plot, fig,
-                        ax_list, mini, maxi, i, split_block)
+                        ax_list, mini, maxi, split_block)
 
     # Add elements affecting all subplots
     for ax in ax_list:
         ax.coastlines(color=col)
 
     # Configure colorbar
-    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap),
-                        ax=ax_list, shrink=0.5, pad=0.01)
     power = int(np.log10(max(maxi, 1)))
-    cbar.formatter.set_useMathText(True)
-    cbar.ax.yaxis.get_offset_text().set_rotation('vertical')
-    cbar_label = f"{var_to_plot} (x$10^{{{power}}} / $m$^3$)"
-    cbar.set_label(cbar_label, rotation='vertical')
-    cbar.formatter.set_powerlimits((0, 0))
+    create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power)
 
     # Add labels to circle plots
     north_minmax = determine_min_max_within_range(
@@ -470,6 +546,16 @@ def label_circle_plots(north_ax, south_ax, north_min, north_max,
     south_ax.text(0.875, 0.125, south_maxtext, **south_kwargs, rotation=45)
 
 
+def create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power):
+    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap),
+                        ax=ax_list, shrink=0.5, pad=0.01)
+    cbar.formatter.set_useMathText(True)
+    cbar.ax.yaxis.get_offset_text().set_rotation('vertical')
+    cbar_label = f"{var_to_plot} (x$10^{{{power}}} / $m$^3$)"
+    cbar.set_label(cbar_label, rotation='vertical')
+    cbar.formatter.set_powerlimits((0, 0))
+
+
 def plot_model_block_results():
     # Get the input arguments
     args = get_command_line_args(inputs.process_command_line_input())
@@ -492,6 +578,31 @@ def plot_model_block_results():
     for filename in args['filelist']:
         # Retrieve all block data
         data = read_routines.read_blocked_netcdf_file(filename, file_vars)
+
+        # Search for compatible 3DCOR files, add to data if found
+        filename_list = filename.split('/')[:-1]
+        searchstr = f"{'/'.join(filename_list)}/3DCOR*.nc"
+        corner_files = glob(searchstr)
+        for f in corner_files:
+            corner_data = read_routines.read_aether_file(f)
+            correct_shape = (
+                data['nblocks'],
+                data['nlons'] + 1,
+                data['nlats'] + 1,
+                data['nalts'] + 1
+            )
+            # TODO: change this to ['lon', 'lat', 'z'] after updating functions
+            valid_file = all(
+                corner_data[var].shape == correct_shape
+                for var in [1, 2, 3]
+            )
+            if valid_file:
+                data['COR_lon'] = corner_data[1]
+                data['COR_lat'] = corner_data[2]
+                data['COR_z'] = corner_data[3]
+                break
+
+        # Separate data dict into all_block_data list of dicts
         all_block_data = []
         for i in range(data['nblocks']):
             block_data = extract_block_data(data, i)
