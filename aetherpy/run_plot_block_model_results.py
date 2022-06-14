@@ -10,6 +10,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.path as mpath
+import matplotlib.patches as mpatches
 import matplotlib.colors as colors
 import numpy as np
 import cartopy.crs as ccrs
@@ -219,44 +220,125 @@ def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
                     mini, maxi, block_index, split_block=False,
                     debug_filename=None):
     # Extract plotting data
-    lons = block_data['lon'][2:-2, 2:-2, 0]
-    lats = block_data['lat'][2:-2, 2:-2, 0]
+    lons = block_data['lon'][2:-2, 2:-2, alt_to_plot]
+    lats = block_data['lat'][2:-2, 2:-2, alt_to_plot]
     v = block_data[var_to_plot][2:-2, 2:-2, alt_to_plot]
     lons = np.unwrap(
         np.unwrap(lons, period=360, axis=0),
         period=360, axis=1
     )
     cmap = cm.plasma if mini >= 0 else cm.bwr
+    plot_kwargs = {
+        'vmin': mini,
+        'vmax': maxi,
+        'cmap': cmap,
+        'transform': ccrs.PlateCarree()
+    }
 
     # Plot data on each Axes instance in axList
     for ax in ax_list:
-        # TODO: Need to generalize this -- bandaid fix for cubesphere
-        if split_block:
-            x_mid = int(lons.shape[0] / 2)
-            y_mid = int(lons.shape[1] / 2)
-            tmpslices = [
-                np.s_[:x_mid, :y_mid],
-                np.s_[:x_mid, y_mid:],
-                np.s_[x_mid:, y_mid:],
-                np.s_[x_mid:, :y_mid]
-            ]
-            for tmpslice in tmpslices:
-                t_lons = lons[tmpslice]
-                t_lats = lats[tmpslice]
-                t_v = v[tmpslice]
-                t_lons = np.unwrap(
-                    np.unwrap(t_lons, period=360, axis=0), period=360, axis=1
-                )
-                ax.pcolor(t_lons, t_lats, t_v, vmin=mini, vmax=maxi,
-                          cmap=cmap, transform=ccrs.PlateCarree())
+        use_cell_centers = (lons.shape == v.shape)
+        if use_cell_centers:
+            plot_with_centers(ax, lons, lats, v, split_block, **plot_kwargs)
         else:
-            ax.pcolor(lons, lats, v, vmin=mini, vmax=maxi,
-                      cmap=cmap, transform=ccrs.PlateCarree())
+            plot_with_corners(ax, lons, lats, v, split_block, **plot_kwargs)
+
     # Step by step debug file generation
     if debug_filename:
         fname = f"{debug_filename}_block{block_index}"
         print(f"  Outputting file: {fname}.png")
         fig.savefig(fname, bbox_inches='tight')
+
+
+# TODO: Streamline code/logic duplication
+def plot_with_centers(ax, lons, lats, v, split_block, **kwargs):
+    if split_block:
+        x_mid = int(lons.shape[0] / 2)
+        y_mid = int(lons.shape[1] / 2)
+        valslices = [
+            np.s_[:x_mid, :y_mid],
+            np.s_[:x_mid, y_mid:],
+            np.s_[x_mid:, y_mid:],
+            np.s_[x_mid:, :y_mid]
+        ]
+        for vslice in valslices:
+            t_lons = lons[vslice]
+            t_lats = lats[vslice]
+            t_v = v[vslice]
+            t_lons = np.unwrap(
+                np.unwrap(t_lons, period=360, axis=0), period=360, axis=1
+            )
+            ax.pcolor(t_lons, t_lats, t_v, **kwargs)
+    else:
+        ax.pcolor(lons, lats, v, **kwargs)
+
+
+def plot_with_corners(ax, lons, lats, v, split_block, **kwargs):
+    if split_block:
+        x_mid = int(lons.shape[0] / 2)
+        y_mid = int(lons.shape[1] / 2)
+        coordslices = [
+            np.s_[:x_mid + 1, :y_mid + 1],
+            np.s_[x_mid:, :y_mid + 1],
+            np.s_[x_mid:, y_mid:],
+            np.s_[:x_mid + 1, y_mid:]
+        ]
+        valslices = [
+            np.s_[:x_mid, :y_mid],
+            np.s_[x_mid:, :y_mid],
+            np.s_[x_mid:, y_mid:],
+            np.s_[:x_mid, y_mid:]
+        ]
+        for cslice, vslice in zip(coordslices, valslices):
+            t_lons = lons[cslice]
+            t_lats = lats[cslice]
+            t_v = v[vslice]
+
+            corners = [
+                np.s_[0, 0],
+                np.s_[0, -1],
+                np.s_[-1, -1],
+                np.s_[-1, 0]
+            ]
+            minlati = 0
+            minlat = np.inf
+            polelon = 0
+            for i, corner in enumerate(corners):
+                if abs(t_lats[corner]) < minlat:
+                    minlat = abs(t_lats[corner])
+                    minlati = i
+            polelon = t_lons[corners[minlati]]
+            polecorner = corners[(minlati + 2) % 4]
+            t_lons[polecorner] = polelon
+
+            t_lons = np.unwrap(
+                np.unwrap(t_lons, period=360, axis=0), period=360, axis=1
+            )
+
+            coll = ax.pcolor(t_lons, t_lats, t_v, **kwargs)
+            pole_i, pole_path = [
+                (i, path) for i, path in enumerate(coll.get_paths())
+                if 90 in abs(path.vertices[:, 1])][0]
+            poly = pole_path.to_polygons()[0]
+            # Insert point after first pole point
+            for i, row in enumerate(poly):
+                if row[1] in [90, -90]:
+                    polepoint = row
+                    poly = np.insert(poly, i + 1,
+                                     [[poly[i + 1, 0], row[1]]], axis=0)
+                    break
+            # Insert point before last pole point
+            for i, row in reversed(list(enumerate(poly))):
+                if np.array_equal(row, polepoint):
+                    poly = np.insert(poly, i,
+                                     [[poly[i - 1, 0], row[1]]], axis=0)
+                    break
+            coll.update_scalarmappable()
+            patch = mpatches.Polygon(poly, transform=ccrs.PlateCarree(),
+                                     color=coll.get_facecolors()[pole_i])
+            ax.add_patch(patch)
+    else:
+        ax.pcolor(lons, lats, v, **kwargs)
 
 
 def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
@@ -281,9 +363,9 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
 
     # Define subplot projections and gridspecs, create subplots
     world_proj = ccrs.PlateCarree(central_longitude=0)
-    north_proj = ccrs.Orthographic(
+    north_proj = ccrs.Stereographic(
         central_latitude=90, central_longitude=north_longitude)
-    south_proj = ccrs.Orthographic(
+    south_proj = ccrs.Stereographic(
         central_latitude=-90, central_longitude=south_longitude)
 
     # Create subplots
