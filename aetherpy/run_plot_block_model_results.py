@@ -6,6 +6,7 @@
 from glob import glob
 import os
 import re
+from xml.dom import minicompat
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -132,7 +133,7 @@ def get_command_line_args(argv):
     return args
 
 
-def determine_min_max_within_range(all_block_data, var, alt,
+def determine_min_max_within_range(data, var, alt,
                                    min_lon=-np.inf, max_lon=np.inf,
                                    min_lat=-np.inf, max_lat=np.inf):
     """Determines the minimum and maximum values of var at a given altitude
@@ -140,8 +141,8 @@ def determine_min_max_within_range(all_block_data, var, alt,
 
     Parameters
     ----------
-    all_block_data : list
-        List of dictionaries containing data for each block
+    data : dict
+        Dictionary containing each block's data
     var : str
         Name of the variable to find the min/max of
     alt : int
@@ -160,27 +161,24 @@ def determine_min_max_within_range(all_block_data, var, alt,
     mini, maxi : tuple
         Tuple containing min and max
     """
-    mini = np.inf
-    maxi = -np.inf
-    for block_data in all_block_data:
-        lon = block_data['lon'][2:-2, 2:-2, alt]
-        lat = block_data['lat'][2:-2, 2:-2, alt]
-        v = block_data[var][2:-2, 2:-2, alt]
-        cond = (lon >= min_lon) & (lon <= max_lon) \
-            & (lat >= min_lat) & (lat <= max_lat)
-        mini = min(mini, np.min(v[cond], initial=np.inf))
-        maxi = max(maxi, np.max(v[cond], initial=-np.inf))
+    all_lons = data['lon'][:, 2:-2, 2:-2, alt]
+    all_lats = data['lat'][:, 2:-2, 2:-2, alt]
+    all_v = data[var][:, 2:-2, 2:-2, alt]
+    cond = (all_lons >= min_lon) & (all_lons <= max_lon) \
+        & (all_lats >= min_lat) & (all_lats <= max_lat)
+    mini = np.min(all_v[cond], initial=np.inf)
+    maxi = np.max(all_v[cond], initial=-np.inf)
     return mini, maxi
 
 
-def determine_min_max(all_block_data, var, alt):
+def determine_min_max(data, var, alt):
     """Determines the minimum and maximum values of var at a given altitude;
     convenience function for determine_min_max_within_range.
 
     Parameters
     ----------
-    all_block_data : list
-        List of dictionaries containing data for each block
+    data : dict
+        Dictionary containing each block's data
     var : str
         Name of the variable to find the min/max of
     alt : int
@@ -192,12 +190,12 @@ def determine_min_max(all_block_data, var, alt):
         Tuple containing min and max
     """
     return determine_min_max_within_range(
-        all_block_data, var, alt
+        data, var, alt
     )
 
 
-def get_plotting_bounds(all_block_data, var, alt):
-    mini, maxi = determine_min_max(all_block_data, var, alt)
+def get_plotting_bounds(data, var, alt):
+    mini, maxi = determine_min_max(data, var, alt)
     if mini < 0:
         maxi = max(np.abs(mini), np.abs(maxi))
         mini = -maxi
@@ -218,15 +216,14 @@ def extract_block_data(data, block_index):
 # Define the main plotting routines
 
 
-def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
-                    mini, maxi, split_block=False,
-                    debug_filename=None, debug_blockindex=None):
+def plot_block_data(data, block_index, var_to_plot, alt_to_plot, fig, ax_list,
+                    mini, maxi, split_block=False, debug_filename=None):
     # Extract plotting data
-    lonkey = 'COR_lon' if 'COR_lon' in block_data.keys() else 'lon'
-    latkey = 'COR_lat' if 'COR_lat' in block_data.keys() else 'lat'
-    lons = block_data[lonkey][2:-2, 2:-2, alt_to_plot]
-    lats = block_data[latkey][2:-2, 2:-2, alt_to_plot]
-    v = block_data[var_to_plot][2:-2, 2:-2, alt_to_plot]
+    lonkey = 'COR_lon' if 'COR_lon' in data.keys() else 'lon'
+    latkey = 'COR_lat' if 'COR_lat' in data.keys() else 'lat'
+    lons = data[lonkey][block_index, 2:-2, 2:-2, alt_to_plot]
+    lats = data[latkey][block_index, 2:-2, 2:-2, alt_to_plot]
+    v = data[var_to_plot][block_index, 2:-2, 2:-2, alt_to_plot]
     lons = np.unwrap(
         np.unwrap(lons, period=360, axis=0),
         period=360, axis=1
@@ -245,8 +242,8 @@ def plot_block_data(block_data, var_to_plot, alt_to_plot, fig, ax_list,
         plot_on_ax(ax, lons, lats, v, split_block, use_centers, **plot_kwargs)
 
     # Step by step debug file generation
-    if debug_filename and debug_blockindex:
-        fname = f"{debug_filename}_block{debug_blockindex}"
+    if debug_filename:
+        fname = f"{debug_filename}_block{block_index}"
         print(f"  Outputting file: {fname}.png")
         fig.savefig(fname, bbox_inches='tight')
 
@@ -425,12 +422,14 @@ def plot_with_corners(ax, lons, lats, v, split_block, **kwargs):
         ax.pcolor(lons, lats, v, **kwargs)
 
 
-def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
+def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
+                    mini=None, maxi=None):
     print(f"  Plotting variable: {var_to_plot}")
 
     # Initialize colorbar information
-    mini, maxi = get_plotting_bounds(
-        all_block_data, var_to_plot, alt_to_plot)
+    if mini is None or maxi is None:
+        mini, maxi = get_plotting_bounds(
+            data, var_to_plot, alt_to_plot)
     norm = colors.Normalize(vmin=mini, vmax=maxi)
     cmap = cm.plasma if mini >= 0 else cm.bwr
     col = 'white' if mini >= 0 else 'black'
@@ -438,8 +437,8 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
     # Initialize figure to plot on
     fig = plt.figure(figsize=(11, 10), constrained_layout=True)
     altitude = round(
-        all_block_data[0]['z'][0, 0, alt_to_plot] / 1000.0, 2)
-    time = all_block_data[0]['time']
+        data['z'][0, 0, 0, alt_to_plot] / 1000.0, 2)
+    time = data['time']
     title = f"{time}; var: {var_to_plot}; alt: {altitude} km"
 
     # Calculate circle plot rotations to place sun at top
@@ -471,10 +470,10 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
     set_circle_plot_bounds([north_ax, south_ax], north_proj, 45)
 
     # Plot all block data on figure
-    for i, block_data in enumerate(all_block_data):
+    for i in range(data['nblocks']):
         print(f"    Computing block {i}")
-        split_block = len(all_block_data) == 6 and i in [4, 5]
-        plot_block_data(block_data, var_to_plot, alt_to_plot, fig,
+        split_block = data['nblocks'] == 6 and i in [4, 5]
+        plot_block_data(data, i, var_to_plot, alt_to_plot, fig,
                         ax_list, mini, maxi, split_block)
 
     # Add elements affecting all subplots
@@ -487,11 +486,11 @@ def plot_all_blocks(all_block_data, var_to_plot, alt_to_plot, plot_filename):
 
     # Add labels to circle plots
     north_minmax = determine_min_max_within_range(
-        all_block_data, var_to_plot, alt_to_plot,
+        data, var_to_plot, alt_to_plot,
         min_lat=45, max_lat=90
     )
     south_minmax = determine_min_max_within_range(
-        all_block_data, var_to_plot, alt_to_plot,
+        data, var_to_plot, alt_to_plot,
         min_lat=-90, max_lat=-45
     )
     label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
@@ -583,9 +582,10 @@ def plot_model_block_results():
     file_vars = ['lon', 'lat', 'z', args['var']] if args['var'] else None
 
     # Read each file's data
-    file_data = {}
+    files_data = {}
+    common_vars = None
     for filename in args['filelist']:
-        # Retrieve all block data
+        # Retrieve data
         data = read_routines.read_blocked_netcdf_file(filename, file_vars)
 
         # Search for compatible 3DCOR files, add to data if found
@@ -611,16 +611,31 @@ def plot_model_block_results():
                 data['COR_lat'] = corner_data[2]
                 data['COR_z'] = corner_data[3]
                 break
-        file_data[filename] = data
+        # Save data to dict, update set of common variables
+        files_data[filename] = data
+        if common_vars is None:
+            common_vars = set(data['vars'])
+        else:
+            common_vars &= set(data['vars'])
+
+    # Calculate min and max for all common vars over all files
+    var_min = {
+        var: np.inf
+        for var in common_vars
+    }
+    var_max = {
+        var: -np.inf
+        for var in common_vars
+    }
+    for filename, data in files_data.items():
+        for var in common_vars:
+            data_min, data_max = determine_min_max(data, var, alt_to_plot)
+            var_min[var] = min(var_min[var], data_min)
+            var_max[var] = max(var_max[var], data_max)
 
     # Generate plots for each file
-    for filename, data in file_data.items():
+    for filename, data in files_data.items():
         print(f"Currently plotting: {filename}")
-        # Separate data dict into all_block_data list of dicts
-        all_block_data = []
-        for i in range(data['nblocks']):
-            block_data = extract_block_data(data, i)
-            all_block_data.append(block_data)
 
         # Plot desired variable if given, plot all variables if not
         all_vars = [v for v in data['vars']
@@ -631,8 +646,13 @@ def plot_model_block_results():
         # Generate plots for each variable requested
         for var_to_plot in plot_vars:
             plot_filename = f"{filename.split('.')[0]}_{var_to_plot}"
-            plot_all_blocks(
-                all_block_data, var_to_plot, alt_to_plot, plot_filename)
+            try:
+                mini = var_min[var_to_plot]
+                maxi = var_max[var_to_plot]
+                plot_all_blocks(
+                    data, var_to_plot, alt_to_plot, plot_filename, mini, maxi)
+            except KeyError:
+                plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename)
 
 
 # Needed to run main script as the default executable from the command line
