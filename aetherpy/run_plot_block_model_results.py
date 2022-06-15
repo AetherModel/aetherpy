@@ -106,19 +106,21 @@ def get_command_line_args(argv):
                     args[akey] = aval
         # Is filename
         else:
-            args['filelist'].append(arg)
+            fnames = glob(arg)
+            fnames = [arg] if len(fnames) == 0 else fnames
+            args['filelist'].extend(fnames)
+            for fname in fnames:
+                match_bin = re.match(r'(.*)bin', fname)
+                if match_bin:
+                    args['is_gitm'] = True
+                    args['has_header'] = False
 
-            match_bin = re.match(r'(.*)bin', arg)
-            if match_bin:
-                args['is_gitm'] = True
-                args['has_header'] = False
-
-                # Check for a header file:
-                check_file = glob(match_bin.group(1) + "header")
-                if len(check_file) > 0 and len(check_file[0]) > 1:
-                    args['has_header'] = True
-            else:
-                args['is_gitm'] = False
+                    # Check for a header file:
+                    check_file = glob(match_bin.group(1) + "header")
+                    if len(check_file) > 0 and len(check_file[0]) > 1:
+                        args['has_header'] = True
+                else:
+                    args['is_gitm'] = False
 
     # Update default movie extension for POSIX systems
     if args['movie'] > 0 and args['ext'] == 'png':
