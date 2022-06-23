@@ -5,3 +5,4 @@
 
 from aetherpy.plot import data_prep
 from aetherpy.plot import movie_routines
+from aetherpy.plot import standard_plots

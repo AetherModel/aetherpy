@@ -157,12 +157,12 @@ def read_aether_netcdf_header(filename, epoch_name='time'):
         nlats - number of latitude grids
         nalts - number of altitude grids
         vars - list of data variable names
-        time - list of datetimes with data
+        time - datetime for the data
         filename - filename of file containing header data
 
     See Also
     --------
-    read_aether_header
+    read_aether_headers
 
     """
 
@@ -234,7 +234,7 @@ def read_aether_ascii_header(filename):
 
     See Also
     --------
-    read_aether_header
+    read_aether_headers
 
     """
 
@@ -297,7 +297,7 @@ def read_aether_one_binary_file(header, ifile, vars_to_read):
     ifile : int
         Integer corresponding to filename in the header dict
     vars_to_read : list
-        List of desired variable names to read
+        List of desired variable name indices to read
 
     Returns
     -------
@@ -523,7 +523,7 @@ def read_gitm_file(filename, file_vars=None):
     filename : str
         GITM file to read
     file_vars : list or NoneType
-        List of desired variable names to read or None to read all
+        List of desired variable name indices to read or None to read all
         (default=None)
 
     Returns
@@ -604,3 +604,38 @@ def read_gitm_file(filename, file_vars=None):
                     (data["nlons"], data["nlats"], data["nalts"]), order="F")
 
     return data
+
+
+def read_headers(filelist, has_header=False, is_gitm=False):
+    """Load header data from a list of model files.
+
+    Parameters
+    ----------
+    filelist : list-like
+        List of model filenames to load
+    has_header : bool
+        Flag indicating that a separate header file contains the header data,
+        as is the case for binary files (default=False)
+    is_gitm : bool
+        Flag indicating whether this is a GITM file, if True, or and Aether
+        file, if False (default=False)
+
+    Returns
+    -------
+    header : dict
+        Dictionary of header data
+
+    See Also
+    --------
+    read_gitm_headers, read_aether_ascii_header, read_aether_headers
+
+    """
+
+    # Load the header data using the appropriate routine
+    if is_gitm and not has_header:
+        header = read_gitm_headers(filelist, finds=0)
+    else:
+        filetype = "ascii" if has_header else "netcdf"
+        header = read_aether_headers(filelist, filetype=filetype)
+
+    return header

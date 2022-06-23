@@ -68,7 +68,8 @@ class TestIORead(object):
 
                     for htime in self.header[hkey]:
                         assert isinstance(htime, dt.datetime), \
-                            "unexpected time format for: {:}".format(htime)
+                            "unexpected time format for: {:} from {:}".format(
+                                htime, self.header[hkey])
                 elif hkey == 'filename':
                     if file_list:
                         assert len(self.header[hkey]) > 0
@@ -177,8 +178,12 @@ class TestIORead(object):
 
     @pytest.mark.parametrize('fbase', ['3DALL_*.nc', '3DBFI_*.nc'])
     @pytest.mark.parametrize('ftype', ['netcdf'])
-    @pytest.mark.parametrize('finds', [(-1), (None), ([0, 1]), (slice(1))])
-    def test_read_aether_headers(self, fbase, ftype, finds):
+    @pytest.mark.parametrize('finds, is_single', [(-1, True), (None, True),
+                                                  (-1, False), (None, False),
+                                                  ([0, 1], False),
+                                                  (slice(1), True),
+                                                  (slice(1), False)])
+    def test_read_aether_headers(self, fbase, ftype, finds, is_single):
         """Test successful Aether header reading.
 
         Parameters
@@ -189,12 +194,18 @@ class TestIORead(object):
             File type
         finds : int, NoneType, list, slice
             File indexers
+        is_single : bool
+            Uses a single file as a string input if True, or a list if False
 
         """
         filenames = glob(os.path.join(self.test_dir, fbase))
 
+        if is_single:
+            filenames = filenames[0]
+
         self.header = read_routines.read_aether_headers(filenames, finds,
                                                         ftype)
+
         self.eval_header(file_list=True)
         return
 
