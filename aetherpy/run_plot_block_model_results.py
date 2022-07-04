@@ -554,7 +554,8 @@ def plot_model_block_results():
 
         # Generate plots for each variable requested
         for var_to_plot in plot_vars:
-            plot_filename = f"{filename.split('.')[0]}_{var_to_plot}"
+            var_name_stripped = var_to_plot.replace(" ", "")
+            plot_filename = f"{filename.split('.')[0]}_{var_name_stripped}"
             try:
                 mini = var_min[var_to_plot]
                 maxi = var_max[var_to_plot]
