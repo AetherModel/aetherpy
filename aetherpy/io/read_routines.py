@@ -14,6 +14,21 @@ from aetherpy.utils.time_conversion import epoch_to_datetime
 from aetherpy import logger
 
 
+class DataArray(np.ndarray):
+    def __new__(cls, input_array, attrs={}):
+        obj = np.asarray(input_array).view(cls)
+        obj.attrs = attrs
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None:
+            return
+        self.attrs = getattr(obj, 'attrs', {
+            'units': None,
+            'long_name': None
+        })
+
+
 def parse_line_into_int_and_string(line, parse_string=True):
     """Parse a data string into integer and string components.
 
@@ -170,29 +185,32 @@ def read_aether_netcdf_header(filename, epoch_name='time'):
     if not os.path.isfile(filename):
         raise IOError('unknown aether netCDF file: {:}'.format(filename))
 
-    header = {'filename': filename}
+    header = {'filename': filename,
+              'nlons': 0,
+              'nlats': 0,
+              'nalts': 0,
+              'nblocks': 1}
 
     # Open the file and read the header data
     with Dataset(filename, 'r') as ncfile:
         ncvars = list()
+        IsFirst = True
         for var in ncfile.variables.values():
-            if len(var.shape) == 3:
-                nlons = var.shape[0]
-                nlats = var.shape[1]
-                nalts = var.shape[2]
+            if (len(var.shape) >= 3):
+                iOff_ = 0
+                if (len(var.shape) == 4):
+                    iOff_ = 1
+                    header["nblocks"] = var.shape[0]
+                nlons = var.shape[0 + iOff_]
+                nlats = var.shape[1 + iOff_]
+                nalts = var.shape[2 + iOff_]
                 ncvars.append(var.name)
 
-                # Test the dimensions
-                if np.any([dim_var not in header.keys()
-                           for dim_var in ['nlons', 'nlats', 'nalts']]):
+                if (IsFirst):
                     header["nlons"] = nlons
                     header["nlats"] = nlats
                     header["nalts"] = nalts
-                elif(header['nlons'] != nlons or header['nlats'] != nlats
-                     or header['nalts'] != nalts):
-                    raise IOError(''.join(['unexpected dimensions for ',
-                                           'variable ', var.name, ' in file ',
-                                           filename]))
+                    IsFirst = False
 
         # Save the unique variable names
         ncvars = np.unique(ncvars)
@@ -285,6 +303,66 @@ def read_aether_ascii_header(filename):
                     header["vars"] = sline.strip()
 
     return header
+
+
+#  Gets dimensions, variables, attributes (may not have attributes)
+# --will require work to integrate with aetherpy
+# --not same format as GITM file headers
+# --only meant for reading block-based Aether netcdf files
+def read_blocked_netcdf_header(filename):
+    # Checks for file existence
+    if not os.path.isfile(filename):
+        raise IOError('unknown aether netCDF file: {:}'.format(filename))
+
+    header = {'filename': filename}  # Included for compatibility
+
+    with Dataset(filename, 'r') as ncfile:
+        # Process header information: nlons, nlats, nalts, nblocks
+        header['nlons'] = len(ncfile.dimensions['lon'])
+        header['nlats'] = len(ncfile.dimensions['lat'])
+        header['nalts'] = len(ncfile.dimensions['z'])
+        header['nblocks'] = len(ncfile.dimensions['block'])
+
+        # Included for compatibility ('vars' slices time out for some reason)
+        header['vars'] = list(ncfile.variables.keys())[1:]
+        header['time'] = epoch_to_datetime(
+            np.array(ncfile.variables['time'])[0])
+
+    return header
+
+
+def read_blocked_netcdf_file(filename, file_vars=None):
+    # Checks for file existence
+    if not os.path.isfile(filename):
+        raise IOError('unknown aether netCDF file: {:}'.format(filename))
+
+    # NOTE: Includes header information for easy access until
+    #       updated package structure is confirmed
+    # Initialize data dict with defaults (will remove these defaults later)
+    # TODO: Remove units and long_name when interface has been changed
+    data = {'filename': filename,
+            'units': '',
+            'long_name': None}
+
+    with Dataset(filename, 'r') as ncfile:
+        # Process header information: nlons, nlats, nalts, nblocks
+        data['nlons'] = len(ncfile.dimensions['lon'])
+        data['nlats'] = len(ncfile.dimensions['lat'])
+        data['nalts'] = len(ncfile.dimensions['z'])
+        data['nblocks'] = len(ncfile.dimensions['block'])
+
+        # Included for compatibility
+        data['vars'] = [var for var in ncfile.variables.keys()
+                        if file_vars is None or var in file_vars]
+
+        # Fetch requested variable data
+        for key in data['vars']:
+            var = ncfile.variables[key]  # key is var name
+            data[key] = DataArray(np.array(var), var.__dict__)
+
+        data['time'] = epoch_to_datetime(np.array(ncfile.variables['time'])[0])
+
+    return data
 
 
 def read_aether_one_binary_file(header, ifile, vars_to_read):
