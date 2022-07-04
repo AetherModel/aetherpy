@@ -200,10 +200,10 @@ def read_aether_netcdf_header(filename, epoch_name='time'):
                 iOff_ = 0
                 if (len(var.shape) == 4):
                     iOff_ = 1
-                    nblocks = var.shape[0]
-                nlons = var.shape[0+iOff_]
-                nlats = var.shape[1+iOff_]
-                nalts = var.shape[2+iOff_]
+                    header["nblocks"] = var.shape[0]
+                nlons = var.shape[0 + iOff_]
+                nlats = var.shape[1 + iOff_]
+                nalts = var.shape[2 + iOff_]
                 ncvars.append(var.name)
 
                 if (IsFirst):
