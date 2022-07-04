@@ -185,29 +185,32 @@ def read_aether_netcdf_header(filename, epoch_name='time'):
     if not os.path.isfile(filename):
         raise IOError('unknown aether netCDF file: {:}'.format(filename))
 
-    header = {'filename': filename}
+    header = {'filename': filename,
+              'nlons': 0,
+              'nlats': 0,
+              'nalts': 0,
+              'nblocks': 1}
 
     # Open the file and read the header data
     with Dataset(filename, 'r') as ncfile:
         ncvars = list()
+        IsFirst = True
         for var in ncfile.variables.values():
-            if len(var.shape) == 3:
-                nlons = var.shape[0]
-                nlats = var.shape[1]
-                nalts = var.shape[2]
+            if (len(var.shape) >= 3):
+                iOff_ = 0
+                if (len(var.shape) == 4):
+                    iOff_ = 1
+                    nblocks = var.shape[0]
+                nlons = var.shape[0+iOff_]
+                nlats = var.shape[1+iOff_]
+                nalts = var.shape[2+iOff_]
                 ncvars.append(var.name)
 
-                # Test the dimensions
-                if np.any([dim_var not in header.keys()
-                           for dim_var in ['nlons', 'nlats', 'nalts']]):
+                if (IsFirst):
                     header["nlons"] = nlons
                     header["nlats"] = nlats
                     header["nalts"] = nalts
-                elif(header['nlons'] != nlons or header['nlats'] != nlats
-                     or header['nalts'] != nalts):
-                    raise IOError(''.join(['unexpected dimensions for ',
-                                           'variable ', var.name, ' in file ',
-                                           filename]))
+                    IsFirst = False
 
         # Save the unique variable names
         ncvars = np.unique(ncvars)
