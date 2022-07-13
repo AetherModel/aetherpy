@@ -79,8 +79,8 @@ class TestIORead(object):
                         assert os.path.isfile(fname), \
                             "header filename {:} is not a file".format(fname)
                 else:
-                    assert np.all(np.unique(self.header[hkey])
-                                  == self.header[hkey]), \
+                    assert (len(set(self.header[hkey]))
+                            == len(self.header[hkey])), \
                         "duplicate variables in header list"
 
                     for var in self.header[hkey]:
@@ -175,7 +175,7 @@ class TestIORead(object):
         assert str(verr).find("unknown aether netCDF file") >= 0
         return
 
-    @pytest.mark.parametrize('fbase', ['3DALL_*.nc', '3DBFI_*.nc'])
+    @pytest.mark.parametrize('fbase', ['3DALL_*g*.nc', '3DBFI_*g*.nc'])
     @pytest.mark.parametrize('ftype', ['netcdf'])
     @pytest.mark.parametrize('finds', [(-1), (None), ([0, 1]), (slice(1))])
     def test_read_aether_headers(self, fbase, ftype, finds):
@@ -195,6 +195,7 @@ class TestIORead(object):
 
         self.header = read_routines.read_aether_headers(filenames, finds,
                                                         ftype)
+
         self.eval_header(file_list=True)
         return
 
@@ -235,4 +236,81 @@ class TestIORead(object):
             assert isinstance(data['units'][i], str)
             assert isinstance(data['long_name'][i], str)
 
+        return
+
+    @pytest.mark.parametrize('fname', ['3DALL_20110320_003000.nc'])
+    @pytest.mark.parametrize('fvars', [None, ['O']])
+    def test_read_blocked_netcdf_header(self, fname, fvars):
+        """Test successful block-based Aether NetCDF header
+
+        Parameters
+        ----------
+        fname : str
+            File base name
+        fvars : NoneType or list
+            List of variable names to read in or NoneType to read all
+
+        """
+        filename = os.path.join(self.test_dir, fname)
+        assert os.path.isfile(filename), "missing test file: {:}".format(
+            filename)
+
+        self.header = read_routines.read_blocked_netcdf_header(
+            filename)
+        self.eval_header(file_list=False)
+        return
+
+    def test_read_blocked_netcdf_header_bad_file(self):
+        """Test raises IOError with bad filename."""
+
+        with pytest.raises(IOError) as verr:
+            read_routines.read_blocked_netcdf_header("not_a_file")
+
+        assert str(verr).find("unknown aether netCDF blocked file") >= 0
+        return
+
+    @pytest.mark.parametrize('fname', ['3DALL_20110320_003000.nc'])
+    @pytest.mark.parametrize('fvars', [None, ['O']])
+    def test_read_blocked_netcdf_file(self, fname, fvars):
+        """Test successful block-based Aether NetCDF data reading into dict.
+
+        Parameters
+        ----------
+        fname : str
+            File base name
+        fvars : NoneType or list
+            List of variable names to read in or NoneType to read all
+
+        """
+        filename = os.path.join(self.test_dir, fname)
+        assert os.path.isfile(filename), "missing test file: {:}".format(
+            filename)
+
+        data = read_routines.read_blocked_netcdf_file(filename, file_vars=fvars)
+
+        # Evaluate the output keys
+        # TODO(#18): 'units' and 'long_name' are here for compatibility
+        #       will be removed when library is refactored
+        #       They are dummy keys containing no data right now
+        assert(isinstance(data, dict))
+        assert 'time' in data.keys(), "'time' missing from output"
+        assert 'units' in data.keys(), "'units' missing from output"
+        assert 'long_name' in data.keys(), "'long_name' missing from output"
+        assert 'vars' in data.keys(), "'vars' missing from output"
+
+        # Evaluate the data variables -- no attributes yet
+        for var in data['vars']:
+            assert var in data.keys(), \
+                'missing variable {:} in output'.format(var)
+            # TODO: add attribute checking once implemented
+
+        return
+
+    def test_read_blocked_netcdf_file_bad_file(self):
+        """Test raises IOError with bad filename."""
+
+        with pytest.raises(IOError) as verr:
+            read_routines.read_blocked_netcdf_file("not_a_file")
+
+        assert str(verr).find("unknown aether netCDF blocked file") >= 0
         return

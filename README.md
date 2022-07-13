@@ -40,6 +40,21 @@ python setup.py develop
 This allows you to change branches to the desired test brach or alter files
 without needing to re-install aetherpy.
 
+## Installation for development using Conda
+
+For developers, aetherpy's dependencies may be installed using the conda package manager via the following steps:
+
+1. If not already installed, install conda through your preferred distribution of Anaconda / Miniconda.
+2. Create a new conda environment with the desired dependencies by running the following command:
+```
+conda create -n aetherpy_env matplotlib numpy pytest netCDF4 cartopy
+```
+3. Activate the conda environment and install aetherpy in develop mode:
+```
+conda activate aetherpy_env
+python setup.py develop
+```
+
 # Getting Started
 
 aetherpy contains a test script to plot model results.  It may be called via:
