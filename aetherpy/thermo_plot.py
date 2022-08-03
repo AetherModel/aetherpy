@@ -436,7 +436,7 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
     col = 'white' if mini >= 0 else 'black'
 
     # Initialize figure to plot on
-    fig = plt.figure(figsize=(11, 10), constrained_layout=True)
+    fig = plt.figure(figsize=(13, 13))
     altitude = round(
         data['z'][0, 0, 0, alt_to_plot] / 1000.0, 2)
     time = data['time']
@@ -463,31 +463,6 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
     world_ax.title.set_text(title)
 
     ax_list = [north_ax, south_ax, world_ax]
-
-    # Set subplot extents
-    world_ax.set_global()
-
-    # Limit latitudes of circle plots to >45 degrees N/S
-    set_circle_plot_bounds([north_ax, south_ax], north_proj, 45)
-
-    # Add elements affecting all subplots
-    for ax in ax_list:
-        ax.coastlines(color=col)
-
-    # Configure colorbar
-    power = int(np.log10(max(maxi, 1)))
-    create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power)
-
-    # Add labels to circle plots
-    north_minmax = determine_min_max_within_range(
-        data, var_to_plot, alt_to_plot,
-        min_lat=45, max_lat=90
-    )
-    south_minmax = determine_min_max_within_range(
-        data, var_to_plot, alt_to_plot,
-        min_lat=-90, max_lat=-45
-    )
-    label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
 
     # Load all input data into a KDTree
     source_lons = []
@@ -533,7 +508,31 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
     }
     for ax in ax_list:
         ax.pcolormesh(target_lon, target_lat, target_v, **plot_kwargs)
-        ax.coastlines()
+
+    # Set subplot extents
+    world_ax.set_global()
+
+    # Limit latitudes of circle plots to >45 degrees N/S
+    set_circle_plot_bounds([north_ax, south_ax], north_proj, 45)
+
+    # Add elements affecting all subplots
+    for ax in ax_list:
+        ax.coastlines(color=col)
+
+    # Configure colorbar
+    power = int(np.log10(max(maxi, 1)))
+    create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power)
+
+    # Add labels to circle plots
+    north_minmax = determine_min_max_within_range(
+        data, var_to_plot, alt_to_plot,
+        min_lat=45, max_lat=90
+    )
+    south_minmax = determine_min_max_within_range(
+        data, var_to_plot, alt_to_plot,
+        min_lat=-90, max_lat=-45
+    )
+    label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
 
     # Save plot
     print(f"  Saving plot to: {plot_filename}.png")
@@ -595,7 +594,7 @@ def label_circle_plots(north_ax, south_ax, north_min, north_max,
 
 def create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power):
     cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap),
-                        ax=ax_list, shrink=0.5, pad=0.01)
+                        ax=ax_list, shrink=0.5, pad=0.03)
     cbar.formatter.set_useMathText(True)
     cbar.ax.yaxis.get_offset_text().set_rotation('vertical')
     cbar_label = f"{var_to_plot} (x$10^{{{power}}} / $m$^3$)"
