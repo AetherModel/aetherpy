@@ -6,6 +6,7 @@
 from glob import glob
 import os
 import re
+import argparse
 from xml.dom import minicompat
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -132,6 +133,81 @@ def get_command_line_args(argv):
 
     return args
 
+def argparse_command_line_args():
+    parser = argparse.ArgumentParser(
+        description='Plotting script for Aether model output files',
+        epilog='This code should work with either GITM files (*.bin) \
+            or Aether netcdf files (*.nc).',
+        add_help=False)
+    parser.add_argument('filelist', nargs='+', help='file(s) to plot')
+    parser.add_argument('-h', '--help', action='store_true', 
+                        help='show this help message and exit')
+    parser.add_argument('-list', action='store_true', 
+                        help='show list of variables and exit')
+    parser.add_argument('-var', nargs='*', default=[],
+                        help='name of variable(s) to plot')
+    parser.add_argument('-varn', nargs='*', type=int, default=[],
+                        help='index of variable(s) to plot')
+    parser.add_argument('-cut', default='alt',
+                        choices=['alt', 'lat', 'lon'],
+                        help='which cut you would like')
+    parser.add_argument('-alt', type=int, default=10,
+                        help='alt in km or grid number (closest)')
+    parser.add_argument('-lat', default=np.nan, type=float,
+                        help='latitude in degrees (closest)')
+    parser.add_argument('-lon', default=np.nan, type=float,
+                        help='longitude in degrees (closest)')
+    parser.add_argument('-log', action='store_true',
+                        help='plot the log of the variable')
+    parser.add_argument('-tec', action='store_true',
+                        help='plot the TEC variable')
+    parser.add_argument('-winds', action='store_true',
+                        help='overplot winds')
+    parser.add_argument('-diff', action='store_true',
+                        help='flag for difference with other plots')
+    parser.add_argument('-is_gitm', action='store_true',
+                        help='flag for plotting gitm files')
+    parser.add_argument('-has_header', action='store_true',
+                        help='flag for if file headers exist')
+    parser.add_argument('-movie', default=0, type=int,
+                        help='provide a positive framerate to create a movie')
+    parser.add_argument('-ext', default='png',
+                        help='figure or movie extension')
+    args = parser.parse_args()
+
+    # Output generic help if no files
+    if (len(args.filelist) == 0):
+        parser.print_help()
+        return False
+    # Process var and varn into one list, output indices and variables if bad
+    header = read_routines.read_blocked_netcdf_header(args.filelist[0])
+    if (args.help or args.list):
+        parser.print_help()
+        list_header_variables(header)
+        return False
+    varnames = args.var
+    for varn in args.varn:
+        try:
+            varnames.append(header['vars'][varn])
+        except IndexError:
+            print(f"{varn} is an invalid variable index")
+            list_header_variables(header)
+            return False
+    for name in varnames:
+        if name not in header['vars']:
+            print(f"{name} is an invalid variable name")
+            list_header_variables(header)
+            return False
+    args.var = varnames
+    return args.__dict__
+    
+
+def list_header_variables(header):
+    print("File Variables: ")
+    print("\tIndex\tName")
+    for i, var in enumerate(header['vars']):
+        print(f"\t{i}\t{var}")
+    
 
 def determine_min_max_within_range(data, var, alt,
                                    min_lon=-np.inf, max_lon=np.inf,
@@ -474,7 +550,12 @@ def create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power):
 
 def plot_model_block_results():
     # Get the input arguments
-    args = get_command_line_args(inputs.process_command_line_input())
+    # args = get_command_line_args(inputs.process_command_line_input())
+    args = argparse_command_line_args()
+    if (args is False):
+        return
+
+    print(args)
 
     # Read headers for input files (assumes all files have same header)
     header = read_routines.read_blocked_netcdf_header(args['filelist'][0])
@@ -488,7 +569,7 @@ def plot_model_block_results():
     # Determine variables to plot (currently hardcoded)
     # TODO: handle winds correctly
     alt_to_plot = args['alt']
-    file_vars = ['lon', 'lat', 'z', args['var']] if args['var'] else None
+    file_vars = ['lon', 'lat', 'z', *args['var']] if args['var'] else None
 
     # Read each file's data
     files_data = {}
@@ -526,6 +607,8 @@ def plot_model_block_results():
             common_vars = set(data['vars'])
         else:
             common_vars &= set(data['vars'])
+    # Remove time from common_vars (not necessary to find min/max)
+    common_vars = [var for var in common_vars if var != 'time']
 
     # Calculate min and max for all common vars over all files
     var_min = {
@@ -550,7 +633,7 @@ def plot_model_block_results():
         all_vars = [v for v in data['vars']
                     if v not in ['time', 'lon', 'lat', 'z',
                                  'COR_lon', 'COR_lat', 'COR_z']]
-        plot_vars = [args['var']] if args['var'] else all_vars
+        plot_vars = args['var'] if args['var'] else all_vars
 
         # Generate plots for each variable requested
         for var_to_plot in plot_vars:

@@ -443,7 +443,6 @@ def plot_model_results():
     if args['movie'] > 0:
         movie_routines.save_movie(filename, ext=args['ext'],
                                   rate=args['movie'])
-
     return
 
 
