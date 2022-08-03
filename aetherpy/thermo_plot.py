@@ -16,6 +16,7 @@ import matplotlib.patches as mpatches
 import matplotlib.colors as colors
 import numpy as np
 import cartopy.crs as ccrs
+from scipy.spatial import KDTree
 
 from aetherpy import logger
 from aetherpy.io import read_routines
@@ -133,6 +134,7 @@ def get_command_line_args(argv):
 
     return args
 
+
 def argparse_command_line_args():
     parser = argparse.ArgumentParser(
         description='Plotting script for Aether model output files',
@@ -140,9 +142,9 @@ def argparse_command_line_args():
             or Aether netcdf files (*.nc).',
         add_help=False)
     parser.add_argument('filelist', nargs='+', help='file(s) to plot')
-    parser.add_argument('-h', '--help', action='store_true', 
+    parser.add_argument('-h', '--help', action='store_true',
                         help='show this help message and exit')
-    parser.add_argument('-list', action='store_true', 
+    parser.add_argument('-list', action='store_true',
                         help='show list of variables and exit')
     parser.add_argument('-var', nargs='*', default=[],
                         help='name of variable(s) to plot')
@@ -200,14 +202,14 @@ def argparse_command_line_args():
             return False
     args.var = varnames
     return args.__dict__
-    
+
 
 def list_header_variables(header):
     print("File Variables: ")
     print("\tIndex\tName")
     for i, var in enumerate(header['vars']):
         print(f"\t{i}\t{var}")
-    
+
 
 def determine_min_max_within_range(data, var, alt,
                                    min_lon=-np.inf, max_lon=np.inf,
@@ -407,6 +409,20 @@ def get_pole_corner_patch(coll):
     return patch
 
 
+def lon_lat_to_cartesian(lon, lat, R=1):
+    """
+    calculates lon, lat coordinates of a point on a sphere with
+    radius R
+    """
+    lon_r = np.radians(lon)
+    lat_r = np.radians(lat)
+
+    x = R * np.cos(lat_r) * np.cos(lon_r)
+    y = R * np.cos(lat_r) * np.sin(lon_r)
+    z = R * np.sin(lat_r)
+    return x, y, z
+
+
 def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
                     mini=None, maxi=None):
     print(f"  Plotting variable: {var_to_plot}")
@@ -454,13 +470,6 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
     # Limit latitudes of circle plots to >45 degrees N/S
     set_circle_plot_bounds([north_ax, south_ax], north_proj, 45)
 
-    # Plot all block data on figure
-    for i in range(data['nblocks']):
-        print(f"    Computing block {i}")
-        split_block = data['nblocks'] == 6 and i in [4, 5]
-        plot_block_data(data, i, var_to_plot, alt_to_plot, fig,
-                        ax_list, mini, maxi, split_block)
-
     # Add elements affecting all subplots
     for ax in ax_list:
         ax.coastlines(color=col)
@@ -479,6 +488,52 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
         min_lat=-90, max_lat=-45
     )
     label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
+
+    # Load all input data into a KDTree
+    source_lons = []
+    source_lats = []
+    source_vals = []
+    for i in range(data['nblocks']):
+        lon = data['lon'][i, 2:-2, 2:-2, alt_to_plot]
+        lat = data['lat'][i, 2:-2, 2:-2, alt_to_plot]
+        v = data[var_to_plot][i, 2:-2, 2:-2, alt_to_plot]
+        source_lons.extend(lon.flatten())
+        source_lats.extend(lat.flatten())
+        source_vals.extend(v.flatten())
+
+    source_vals = np.asarray(source_vals)
+    x_source, y_source, z_source = lon_lat_to_cartesian(source_lons,
+                                                        source_lats)
+    tree = KDTree(list(zip(x_source, y_source, z_source)))
+
+    # Plot all interpolated data onto figure
+    # Generate target spherical mesh to interpolate to
+    lon_cells = 40
+    lat_cells = 40
+    lon_halfdim = 360 / (2 * lon_cells)
+    lat_halfdim = 180 / (2 * lat_cells)
+    lon_centers = np.linspace(0 + lon_halfdim, 360 - lon_halfdim, lon_cells)
+    lat_centers = np.linspace(-90 + lat_halfdim, 90 - lat_halfdim, lat_cells)
+    target_lon, target_lat = np.meshgrid(lon_centers, lat_centers)
+
+    # Interpolate data to new mesh
+    x_target, y_target, z_target = lon_lat_to_cartesian(target_lon.flatten(),
+                                                        target_lat.flatten())
+    d, inds = tree.query(list(zip(x_target, y_target, z_target)), k=10)
+    w = 1.0 / (d * d)
+    target_v = np.sum(w * source_vals[inds], axis=1) / np.sum(w, axis=1)
+    target_v.shape = target_lon.shape
+
+    # Plot interpolated data
+    plot_kwargs = {
+        'vmin': mini,
+        'vmax': maxi,
+        'cmap': cmap,
+        'transform': ccrs.PlateCarree()
+    }
+    for ax in ax_list:
+        ax.pcolormesh(target_lon, target_lat, target_v, **plot_kwargs)
+        ax.coastlines()
 
     # Save plot
     print(f"  Saving plot to: {plot_filename}.png")
@@ -577,30 +632,6 @@ def plot_model_block_results():
     for filename in args['filelist']:
         # Retrieve data
         data = read_routines.read_blocked_netcdf_file(filename, file_vars)
-
-        # Search for compatible 3DCOR files, add to data if found
-        filename_list = filename.split('/')[:-1]
-        searchdir = '.' if len(filename_list) == 0 else '/'.join(filename_list)
-        searchstr = f"{searchdir}/3DCOR*.nc"
-        corner_files = glob(searchstr)
-        for f in corner_files:
-            corner_data = read_routines.read_aether_file(f)
-            correct_shape = (
-                data['nblocks'],
-                data['nlons'] + 1,
-                data['nlats'] + 1,
-                data['nalts'] + 1
-            )
-            # TODO: change this to ['lon', 'lat', 'z'] after updating functions
-            valid_file = all(
-                corner_data[var].shape == correct_shape
-                for var in [1, 2, 3]
-            )
-            if valid_file:
-                data['COR_lon'] = corner_data[1]
-                data['COR_lat'] = corner_data[2]
-                data['COR_z'] = corner_data[3]
-                break
         # Save data to dict, update set of common variables
         files_data[filename] = data
         if common_vars is None:
@@ -631,21 +662,17 @@ def plot_model_block_results():
 
         # Plot desired variable if given, plot all variables if not
         all_vars = [v for v in data['vars']
-                    if v not in ['time', 'lon', 'lat', 'z',
-                                 'COR_lon', 'COR_lat', 'COR_z']]
+                    if v not in ['time', 'lon', 'lat', 'z']]
         plot_vars = args['var'] if args['var'] else all_vars
 
         # Generate plots for each variable requested
         for var_to_plot in plot_vars:
             var_name_stripped = var_to_plot.replace(" ", "")
             plot_filename = f"{filename.split('.')[0]}_{var_name_stripped}"
-            try:
-                mini = var_min[var_to_plot]
-                maxi = var_max[var_to_plot]
-                plot_all_blocks(
-                    data, var_to_plot, alt_to_plot, plot_filename, mini, maxi)
-            except KeyError:
-                plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename)
+            mini = var_min[var_to_plot] if var_to_plot in var_min else None
+            maxi = var_max[var_to_plot] if var_to_plot in var_max else None
+            plot_all_blocks(
+                data, var_to_plot, alt_to_plot, plot_filename, mini, maxi)
 
 
 # Needed to run main script as the default executable from the command line
