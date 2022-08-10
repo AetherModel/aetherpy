@@ -483,8 +483,8 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
 
     # Plot all interpolated data onto figure
     # Generate target spherical mesh to interpolate to
-    lon_cells = 40
-    lat_cells = 40
+    lon_cells = 200
+    lat_cells = 100
     lon_halfdim = 360 / (2 * lon_cells)
     lat_halfdim = 180 / (2 * lat_cells)
     lon_centers = np.linspace(0 + lon_halfdim, 360 - lon_halfdim, lon_cells)
@@ -608,8 +608,6 @@ def plot_model_block_results():
     args = argparse_command_line_args()
     if (args is False):
         return
-
-    print(args)
 
     # Read headers for input files (assumes all files have same header)
     header = read_routines.read_blocked_netcdf_header(args['filelist'][0])
