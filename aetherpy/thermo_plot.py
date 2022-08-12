@@ -184,8 +184,8 @@ def determine_min_max_within_range(data, var, alt,
     all_v = data[var][:, 2:-2, 2:-2, alt]
     cond = (all_lons >= min_lon) & (all_lons <= max_lon) \
         & (all_lats >= min_lat) & (all_lats <= max_lat)
-    mini = np.min(all_v[cond], initial=np.inf)
-    maxi = np.max(all_v[cond], initial=-np.inf)
+    mini = np.nanmin(all_v[cond], initial=np.inf)
+    maxi = np.nanmax(all_v[cond], initial=-np.inf)
     return mini, maxi
 
 
@@ -350,7 +350,7 @@ def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename,
     label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
 
     # Save plot
-    print(f"  Saving plot to: {plot_filename}.png")
+    print(f"    Saving plot to: {plot_filename}.png")
     fig.savefig(plot_filename, bbox_inches='tight')
     plt.close(fig)
 

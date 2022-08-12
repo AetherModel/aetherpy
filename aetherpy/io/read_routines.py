@@ -206,7 +206,7 @@ def read_aether_netcdf_header(filename, epoch_name='time'):
                     header["nlats"] = nlats
                     header["nalts"] = nalts
                 elif (header['nlons'] != nlons or header['nlats'] != nlats
-                     or header['nalts'] != nalts):
+                        or header['nalts'] != nalts):
                     raise IOError(''.join(['unexpected dimensions for ',
                                            'variable ', var.name, ' in file ',
                                            filename]))
