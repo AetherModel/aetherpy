@@ -86,47 +86,44 @@ def argparse_command_line_args():
         add_help=False)
     parser.add_argument('filelist', nargs='+', help='file(s) to plot')
     parser.add_argument('-h', '--help', action='store_true',
-                        help='show this help message and exit')
-    parser.add_argument('-list', action='store_true',
-                        help='show list of variables and exit')
-    parser.add_argument('-var', nargs='*', default=[],
+                        help='show help message and list of variables, exit')
+    parser.add_argument('-v', '--var', nargs='*', default=[],
                         help='name of variable(s) to plot')
-    parser.add_argument('-varn', nargs='*', type=int, default=[],
+    parser.add_argument('-n', '--varn', nargs='*', type=int, default=[],
                         help='index of variable(s) to plot')
-    parser.add_argument('-cut', default='alt',
+    parser.add_argument('-c', '--cut', default='alt',
                         choices=['alt', 'lat', 'lon'],
                         help='which cut you would like')
-    parser.add_argument('-alt', type=int, default=10,
+    parser.add_argument('-a', '--alt', default=np.nan, type=float,
                         help='alt in km or grid number (closest)')
-    parser.add_argument('-lat', default=np.nan, type=float,
+    parser.add_argument('--lat', default=np.nan, type=float,
                         help='latitude in degrees (closest)')
-    parser.add_argument('-lon', default=np.nan, type=float,
+    parser.add_argument('--lon', default=np.nan, type=float,
                         help='longitude in degrees (closest)')
-    parser.add_argument('-log', action='store_true',
+    parser.add_argument('-l', '--log', action='store_true',
                         help='plot the log of the variable')
-    parser.add_argument('-tec', action='store_true',
+    parser.add_argument('-t', '--tec', action='store_true',
                         help='plot the TEC variable')
-    parser.add_argument('-winds', action='store_true',
+    parser.add_argument('-w', '--winds', action='store_true',
                         help='overplot winds')
-    parser.add_argument('-diff', action='store_true',
+    parser.add_argument('-d', '--diff', action='store_true',
                         help='flag for difference with other plots')
-    parser.add_argument('-is_gitm', action='store_true',
+    parser.add_argument('--is_gitm', action='store_true',
                         help='flag for plotting gitm files')
-    parser.add_argument('-has_header', action='store_true',
+    parser.add_argument('--has_header', action='store_true',
                         help='flag for if file headers exist')
-    parser.add_argument('-movie', default=0, type=int,
+    parser.add_argument('--movie', default=0, type=int,
                         help='provide a positive framerate to create a movie')
-    parser.add_argument('-ext', default='png',
+    parser.add_argument('--ext', default='png',
                         help='figure or movie extension')
     args = parser.parse_args()
-
     # Output generic help if no files
     if (len(args.filelist) == 0):
         parser.print_help()
         return False
     # Process var and varn into one list, output indices and variables if bad
     header = read_routines.read_blocked_netcdf_header(args.filelist[0])
-    if (args.help or args.list):
+    if (args.help):
         parser.print_help()
         list_header_variables(header)
         return False
@@ -241,24 +238,24 @@ def lon_lat_to_cartesian(lon, lat, R=1):
     return x, y, z
 
 
-def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
+def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename,
                     mini=None, maxi=None):
     print(f"  Plotting variable: {var_to_plot}")
-
-    # Initialize colorbar information
-    if mini is None or maxi is None:
-        mini, maxi = get_plotting_bounds(
-            data, var_to_plot, alt_to_plot)
-    norm = colors.Normalize(vmin=mini, vmax=maxi)
-    cmap = cm.plasma if mini >= 0 else cm.bwr
-    col = 'white' if mini >= 0 else 'black'
 
     # Initialize figure to plot on
     fig = plt.figure(figsize=(13, 13))
     altitude = round(
-        data['z'][0, 0, 0, alt_to_plot] / 1000.0, 2)
+        data['z'][0, 0, 0, alt_idx_to_plot] / 1000.0, 2)
     time = data['time']
     title = f"{time}; var: {var_to_plot}; alt: {altitude} km"
+
+    # Initialize colorbar information
+    if mini is None or maxi is None:
+        mini, maxi = get_plotting_bounds(
+            data, var_to_plot, alt_idx_to_plot)
+    norm = colors.Normalize(vmin=mini, vmax=maxi)
+    cmap = cm.plasma if mini >= 0 else cm.bwr
+    col = 'white' if mini >= 0 else 'black'
 
     # Calculate circle plot rotations to place sun at top
     hours = time.hour + time.minute / 60 + time.second / 3600
@@ -287,9 +284,9 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
     source_lats = []
     source_vals = []
     for i in range(data['nblocks']):
-        lon = data['lon'][i, 2:-2, 2:-2, alt_to_plot]
-        lat = data['lat'][i, 2:-2, 2:-2, alt_to_plot]
-        v = data[var_to_plot][i, 2:-2, 2:-2, alt_to_plot]
+        lon = data['lon'][i, 2:-2, 2:-2, alt_idx_to_plot]
+        lat = data['lat'][i, 2:-2, 2:-2, alt_idx_to_plot]
+        v = data[var_to_plot][i, 2:-2, 2:-2, alt_idx_to_plot]
         source_lons.extend(lon.flatten())
         source_lats.extend(lat.flatten())
         source_vals.extend(v.flatten())
@@ -343,11 +340,11 @@ def plot_all_blocks(data, var_to_plot, alt_to_plot, plot_filename,
 
     # Add labels to circle plots
     north_minmax = determine_min_max_within_range(
-        data, var_to_plot, alt_to_plot,
+        data, var_to_plot, alt_idx_to_plot,
         min_lat=45, max_lat=90
     )
     south_minmax = determine_min_max_within_range(
-        data, var_to_plot, alt_to_plot,
+        data, var_to_plot, alt_idx_to_plot,
         min_lat=-90, max_lat=-45
     )
     label_circle_plots(north_ax, south_ax, *north_minmax, *south_minmax)
@@ -420,6 +417,22 @@ def create_colorbar(fig, norm, cmap, ax_list, var_to_plot, power):
     cbar.formatter.set_powerlimits((0, 0))
 
 
+def read_all_files(filelist, file_vars=None):
+    files_data = {}
+    common_vars = None
+    for filename in filelist:
+        # Retrieve data
+        data = read_routines.read_blocked_netcdf_file(filename, file_vars)
+        # Save data to dict, update set of common variables
+        files_data[filename] = data
+        if common_vars is None:
+            common_vars = set(data['vars'])
+        else:
+            common_vars &= set(data['vars'])
+    common_vars = [var for var in common_vars if var != 'time']
+    return files_data, common_vars
+
+
 def plot_model_block_results():
     # Get the input arguments
     # args = get_command_line_args(inputs.process_command_line_input())
@@ -438,23 +451,11 @@ def plot_model_block_results():
 
     # Determine variables to plot (currently hardcoded)
     # TODO: handle winds correctly
-    alt_to_plot = args['alt']
+    desired_alt = args['alt'] * 1000
     file_vars = ['lon', 'lat', 'z', *args['var']] if args['var'] else None
 
-    # Read each file's data
-    files_data = {}
-    common_vars = None
-    for filename in args['filelist']:
-        # Retrieve data
-        data = read_routines.read_blocked_netcdf_file(filename, file_vars)
-        # Save data to dict, update set of common variables
-        files_data[filename] = data
-        if common_vars is None:
-            common_vars = set(data['vars'])
-        else:
-            common_vars &= set(data['vars'])
-    # Remove time from common_vars (not necessary to find min/max)
-    common_vars = [var for var in common_vars if var != 'time']
+    # Process all file data
+    files_data, common_vars = read_all_files(args['filelist'], file_vars)
 
     # Calculate min and max for all common vars over all files
     var_min = {
@@ -466,8 +467,10 @@ def plot_model_block_results():
         for var in common_vars
     }
     for filename, data in files_data.items():
+        available_alts = data['z'][0, 0, 0, :]
+        alt_idx_to_plot = np.argmin(np.abs(available_alts - desired_alt))
         for var in common_vars:
-            data_min, data_max = determine_min_max(data, var, alt_to_plot)
+            data_min, data_max = determine_min_max(data, var, alt_idx_to_plot)
             var_min[var] = min(var_min[var], data_min)
             var_max[var] = max(var_max[var], data_max)
 
@@ -479,6 +482,8 @@ def plot_model_block_results():
         all_vars = [v for v in data['vars']
                     if v not in ['time', 'lon', 'lat', 'z']]
         plot_vars = args['var'] if args['var'] else all_vars
+        available_alts = data['z'][0, 0, 0, :]
+        alt_idx_to_plot = np.argmin(np.abs(available_alts - desired_alt))
 
         # Generate plots for each variable requested
         for var_to_plot in plot_vars:
@@ -487,7 +492,7 @@ def plot_model_block_results():
             mini = var_min[var_to_plot] if var_to_plot in var_min else None
             maxi = var_max[var_to_plot] if var_to_plot in var_max else None
             plot_all_blocks(
-                data, var_to_plot, alt_to_plot, plot_filename, mini, maxi)
+                data, var_to_plot, alt_idx_to_plot, plot_filename, mini, maxi)
 
 
 # Needed to run main script as the default executable from the command line

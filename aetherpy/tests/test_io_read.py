@@ -296,7 +296,7 @@ class TestIORead(object):
         # NOTE: 'units' and 'long_name' are here for backwards compatibility
         #       will be removed when library is refactored
         #       They are dummy keys containing no data right now
-        assert(isinstance(data, dict))
+        assert isinstance(data, dict)
         assert 'time' in data.keys(), "'time' missing from output"
         assert 'units' in data.keys(), "'units' missing from output"
         assert 'long_name' in data.keys(), "'long_name' missing from output"
