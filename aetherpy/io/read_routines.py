@@ -3,6 +3,8 @@
 # Full license can be found in License.md
 """Routines to read Aether files."""
 
+# TODO(#19): Most parts of this file will be changed when switching to xarray
+
 import datetime as dt
 from netCDF4 import Dataset
 import numpy as np
@@ -185,32 +187,29 @@ def read_aether_netcdf_header(filename, epoch_name='time'):
     if not os.path.isfile(filename):
         raise IOError('unknown aether netCDF file: {:}'.format(filename))
 
-    header = {'filename': filename,
-              'nlons': 0,
-              'nlats': 0,
-              'nalts': 0,
-              'nblocks': 1}
+    header = {'filename': filename}
 
     # Open the file and read the header data
     with Dataset(filename, 'r') as ncfile:
         ncvars = list()
-        IsFirst = True
         for var in ncfile.variables.values():
-            if (len(var.shape) >= 3):
-                iOff_ = 0
-                if (len(var.shape) == 4):
-                    iOff_ = 1
-                    header["nblocks"] = var.shape[0]
-                nlons = var.shape[0 + iOff_]
-                nlats = var.shape[1 + iOff_]
-                nalts = var.shape[2 + iOff_]
+            if len(var.shape) == 3:
+                nlons = var.shape[0]
+                nlats = var.shape[1]
+                nalts = var.shape[2]
                 ncvars.append(var.name)
 
-                if (IsFirst):
+                # Test the dimensions
+                if np.any([dim_var not in header.keys()
+                           for dim_var in ['nlons', 'nlats', 'nalts']]):
                     header["nlons"] = nlons
                     header["nlats"] = nlats
                     header["nalts"] = nalts
-                    IsFirst = False
+                elif (header['nlons'] != nlons or header['nlats'] != nlats
+                     or header['nalts'] != nalts):
+                    raise IOError(''.join(['unexpected dimensions for ',
+                                           'variable ', var.name, ' in file ',
+                                           filename]))
 
         # Save the unique variable names
         ncvars = np.unique(ncvars)
@@ -305,14 +304,43 @@ def read_aether_ascii_header(filename):
     return header
 
 
-#  Gets dimensions, variables, attributes (may not have attributes)
-# --will require work to integrate with aetherpy
-# --not same format as GITM file headers
-# --only meant for reading block-based Aether netcdf files
 def read_blocked_netcdf_header(filename):
+    """Read header information from a blocked Aether netcdf file.
+
+    Parameters
+    ----------
+    filename : str
+        An Aether netCDF filename
+
+    Returns
+    -------
+    header : dict
+        A dictionary containing header information from the netCDF file,
+        including:
+        filename - filename of file containing header data
+        nlons - number of longitude grids per block
+        nlats - number of latitude grids per block
+        nalts - number of altitude grids per block
+        nblocks - number of blocks in file
+        vars - list of data variable names
+        time - datetime for time of file
+
+    Raises
+    --------
+    IOError
+        If the input file does not exist
+    KeyError
+        If any expected dimensions of the input netCDF file are not present
+
+    Notes
+    -----
+    This routine only works with blocked Aether netCDF files.
+
+    """
+
     # Checks for file existence
     if not os.path.isfile(filename):
-        raise IOError('unknown aether netCDF file: {:}'.format(filename))
+        raise IOError(f"unknown aether netCDF blocked file: {filename}")
 
     header = {'filename': filename}  # Included for compatibility
 
@@ -332,14 +360,51 @@ def read_blocked_netcdf_header(filename):
 
 
 def read_blocked_netcdf_file(filename, file_vars=None):
+    """Read all data from a blocked Aether netcdf file.
+
+    Parameters
+    ----------
+    filename : str
+        An Aether netCDF filename
+    file_vars : list or NoneType
+        List of desired variable neames to read, or None to read all
+        (default=None)
+
+    Returns
+    -------
+    data : dict
+        A dictionary containing all data from the netCDF file, including:
+        filename - filename of file containing header data
+        nlons - number of longitude grids per block
+        nlats - number of latitude grids per block
+        nalts - number of altitude grids per block
+        nblocks - number of blocks in file
+        vars - list of data variable names
+        time - datetime for time of file
+        The dictionary also contains a read_routines.DataArray keyed to the
+        corresponding variable name. Each DataArray carries both the variable's
+        data from the netCDF file and the variable's corresponding attributes.
+
+    Raises
+    --------
+    IOError
+        If the input file does not exist
+    KeyError
+        If any expected dimensions of the input netCDF file are not present
+
+    Notes
+    -----
+    This routine only works with blocked Aether netCDF files.
+
+    """
+
     # Checks for file existence
     if not os.path.isfile(filename):
-        raise IOError('unknown aether netCDF file: {:}'.format(filename))
+        raise IOError(f"unknown aether netCDF blocked file: {filename}")
 
     # NOTE: Includes header information for easy access until
     #       updated package structure is confirmed
     # Initialize data dict with defaults (will remove these defaults later)
-    # TODO: Remove units and long_name when interface has been changed
     data = {'filename': filename,
             'units': '',
             'long_name': None}
@@ -501,8 +566,8 @@ def read_gitm_headers(filelist, finds=-1):
                 header["nlons"] = nlons
                 header["nlats"] = nlats
                 header["nalts"] = nalts
-            elif (header['nlons'] != nlons or header['nlats'] != nlats
-                    or header['nalts'] != nalts):
+            elif(header['nlons'] != nlons or header['nlats'] != nlats
+                 or header['nalts'] != nalts):
                 raise IOError(''.join(['unexpected dimensions in file ',
                                        filename]))
 

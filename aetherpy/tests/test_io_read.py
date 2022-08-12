@@ -255,12 +255,8 @@ class TestIORead(object):
         assert os.path.isfile(filename), "missing test file: {:}".format(
             filename)
 
-        # self.header = read_routines.read_blocked_netcdf_header(
-        #     filename, file_vars=fvars)
-
         self.header = read_routines.read_blocked_netcdf_header(
-            filename
-        )
+            filename)
         self.eval_header(file_list=False)
         return
 
@@ -270,7 +266,7 @@ class TestIORead(object):
         with pytest.raises(IOError) as verr:
             read_routines.read_blocked_netcdf_header("not_a_file")
 
-        assert str(verr).find("unknown aether netCDF file") >= 0
+        assert str(verr).find("unknown aether netCDF blocked file") >= 0
         return
 
     @pytest.mark.parametrize('fname', ['3DALL_20110320_003000.nc'])
@@ -293,7 +289,7 @@ class TestIORead(object):
         data = read_routines.read_blocked_netcdf_file(filename, file_vars=fvars)
 
         # Evaluate the output keys
-        # NOTE: 'units' and 'long_name' are here for backwards compatibility
+        # TODO(#18): 'units' and 'long_name' are here for compatibility
         #       will be removed when library is refactored
         #       They are dummy keys containing no data right now
         assert isinstance(data, dict)
@@ -316,5 +312,5 @@ class TestIORead(object):
         with pytest.raises(IOError) as verr:
             read_routines.read_blocked_netcdf_file("not_a_file")
 
-        assert str(verr).find("unknown aether netCDF file") >= 0
+        assert str(verr).find("unknown aether netCDF blocked file") >= 0
         return
