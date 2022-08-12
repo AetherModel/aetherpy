@@ -566,8 +566,8 @@ def read_gitm_headers(filelist, finds=-1):
                 header["nlons"] = nlons
                 header["nlats"] = nlats
                 header["nalts"] = nalts
-            elif(header['nlons'] != nlons or header['nlats'] != nlats
-                 or header['nalts'] != nalts):
+            elif (header['nlons'] != nlons or header['nlats'] != nlats
+                    or header['nalts'] != nalts):
                 raise IOError(''.join(['unexpected dimensions in file ',
                                        filename]))
 
