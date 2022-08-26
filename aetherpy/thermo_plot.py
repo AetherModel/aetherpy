@@ -95,7 +95,7 @@ def argparse_command_line_args():
                         choices=['alt', 'lat', 'lon'],
                         help='which cut you would like')
     parser.add_argument('-a', '--alt', default=np.nan, type=float,
-                        help='alt in km or grid number (closest)')
+                        help='alt in km (closest)')
     parser.add_argument('--lat', default=np.nan, type=float,
                         help='latitude in degrees (closest)')
     parser.add_argument('--lon', default=np.nan, type=float,
@@ -105,7 +105,9 @@ def argparse_command_line_args():
     parser.add_argument('-t', '--tec', action='store_true',
                         help='plot the TEC variable')
     parser.add_argument('-w', '--winds', action='store_true',
-                        help='overplot winds')
+                        help='overplot neutral winds (only if --ions is off)')
+    parser.add_argument('-i', '--ions', action='store_true',
+                        help='overplot ion winds')
     parser.add_argument('-d', '--diff', action='store_true',
                         help='flag for difference with other plots')
     parser.add_argument('--is_gitm', action='store_true',
@@ -116,13 +118,15 @@ def argparse_command_line_args():
                         help='provide a positive framerate to create a movie')
     parser.add_argument('--ext', default='png',
                         help='figure or movie extension')
+    parser.add_argument('--original', action='store_true',
+                        help='create exact plots (warning: very slow)')
     args = parser.parse_args()
     # Output generic help if no files
     if (len(args.filelist) == 0):
         parser.print_help()
         return False
     # Process var and varn into one list, output indices and variables if bad
-    header = read_routines.read_blocked_netcdf_header(args.filelist[0])
+    header = read_routines.read_file(args.filelist[0])
     if (args.help):
         parser.print_help()
         list_header_variables(header)
@@ -238,7 +242,124 @@ def lon_lat_to_cartesian(lon, lat, R=1):
     return x, y, z
 
 
-def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename,
+def generate_spherical_mesh(lon_cells, lat_cells):
+    lon_halfdim = 360 / (2 * lon_cells)
+    lat_halfdim = 180 / (2 * lat_cells)
+    x = np.linspace(0 + lon_halfdim, 360 - lon_halfdim, lon_cells)
+    y = np.linspace(-90 + lat_halfdim, 90 - lat_halfdim, lat_cells)
+    X, Y = np.meshgrid(x, y)
+    return X, Y
+
+
+def generate_circular_mesh(lon_cells, lat_cells, reference_lat):
+    lons = []
+    lats = []
+    lat_halfdim = 180 / (2 * lat_cells)
+    lat_centers = np.linspace(-90 + lat_halfdim, 90 - lat_halfdim, lat_cells)
+    reference_cos = np.cos(np.radians(reference_lat))
+    ring_lon_cells = np.int64(
+        lon_cells * np.cos(np.radians(lat_centers)) / reference_cos)
+    for lat, cells in zip(lat_centers, ring_lon_cells):
+        ring_lons = np.linspace(0, 360, cells + 1)[:-1]
+        ring_lats = [lat] * cells
+        lons.extend(ring_lons)
+        lats.extend(ring_lats)
+    lons = np.asarray(lons)
+    lats = np.asarray(lats)
+    return lons, lats
+
+
+def plot_winds(ax, data, alt_idx_to_plot, args, target_mesh):
+    if not (args['winds'] or args['ions']):
+        return
+    desire_neutral_winds = not args['ions']
+    neutral_vars = {
+        'east': 'Zonal Wind',
+        'north': 'Meridional Wind',
+        'up': 'Vertical Wind'
+    }
+    ion_vars = {
+        'east': 'BulkIon Velocity (Zonal)',
+        'north': 'BulkIon Velocity (Meridional)',
+        'up': 'BulkIon Velocity (Vertical)'
+    }
+    wind_vars = neutral_vars if desire_neutral_winds else ion_vars
+    vars_to_plot = list(wind_vars.values())
+    # TODO: Create adjusted wind mesh to fix density around poles
+    
+    target_lon, target_lat, target_winds = generate_interpolated_data(
+        data, vars_to_plot, alt_idx_to_plot, target_mesh=target_mesh
+    )
+    # TODO: Choose x_winds and y_winds based on cut from args
+    x_winds = target_winds[wind_vars['east']]
+    y_winds = target_winds[wind_vars['north']]
+
+    # Example uniform winds for testing
+    # x_winds = np.ones(target_lon.shape)
+    # y_winds = np.ones(target_lon.shape) * 0.5
+
+    ax.quiver(target_lon, target_lat, x_winds, y_winds,
+              transform=ccrs.PlateCarree())
+
+
+def generate_interpolated_data(data, vars_to_plot, alt_idx_to_plot,
+                               lon_cells=1800, lat_cells=900, target_mesh=None,
+                               neighbors=1):
+    # Validate vars_to_plot input type
+    if not isinstance(vars_to_plot, list):
+        vars_to_plot = [vars_to_plot]
+    # Load input data for all variables
+    source_lons = []
+    source_lats = []
+    source_vals = {var: [] for var in vars_to_plot}
+    for i in range(data['nblocks']):
+        lon = data['lon'][i, 2:-2, 2:-2, alt_idx_to_plot]
+        lat = data['lat'][i, 2:-2, 2:-2, alt_idx_to_plot]
+        source_lons.extend(lon.flatten())
+        source_lats.extend(lat.flatten())
+        for var in vars_to_plot:
+            v = data[var][i, 2:-2, 2:-2, alt_idx_to_plot]
+            source_vals[var].extend(v.flatten())
+
+    # Generate KDTree of source point cloud
+    x_source, y_source, z_source = lon_lat_to_cartesian(source_lons,
+                                                        source_lats)
+    tree = KDTree(list(zip(x_source, y_source, z_source)))
+
+    # Generate target mesh
+    if target_mesh is None:
+        target_lon, target_lat = generate_spherical_mesh(lon_cells, lat_cells)
+    else:
+        target_lon, target_lat = target_mesh
+
+    # Compute IDW interpolation weights
+    x_target, y_target, z_target = lon_lat_to_cartesian(target_lon.flatten(),
+                                                        target_lat.flatten())
+    d, inds = tree.query(list(zip(x_target, y_target, z_target)), k=neighbors)
+    if len(d.shape) == 1:
+        d = np.expand_dims(d, axis=1)
+    if len(inds.shape) == 1:
+        inds = np.expand_dims(inds, axis=1)
+    d += 0.00001
+    w = 1.0 / (d * d)
+
+    print(d.shape, inds.shape)
+
+    # Apply weights to get interpolated variable data
+    target_vs = {}
+    for var, values in source_vals.items():
+        values = np.asarray(values)
+        target_v = np.sum(w * values[inds], axis=1) / np.sum(w, axis=1)
+        target_v.shape = target_lon.shape
+        target_vs[var] = target_v
+
+    # Simplify output if only one variable was given
+    target_output = target_v if len(vars_to_plot) == 1 else target_vs
+
+    return target_lon, target_lat, target_output
+
+
+def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename, args,
                     mini=None, maxi=None):
     print(f"  Plotting variable: {var_to_plot}")
 
@@ -277,44 +398,25 @@ def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename,
     world_ax = fig.add_subplot(gs[1, :], projection=world_proj)
     world_ax.title.set_text(title)
 
-    ax_list = [north_ax, south_ax, world_ax]
+    # Set subplot extents
+    world_ax.set_global()
 
-    # Load all input data into a KDTree
-    source_lons = []
-    source_lats = []
-    source_vals = []
-    for i in range(data['nblocks']):
-        lon = data['lon'][i, 2:-2, 2:-2, alt_idx_to_plot]
-        lat = data['lat'][i, 2:-2, 2:-2, alt_idx_to_plot]
-        v = data[var_to_plot][i, 2:-2, 2:-2, alt_idx_to_plot]
-        source_lons.extend(lon.flatten())
-        source_lats.extend(lat.flatten())
-        source_vals.extend(v.flatten())
+    # Limit latitudes of circle plots to >45 degrees N/S
+    border_latitude = 45
+    set_circle_plot_bounds([north_ax, south_ax], north_proj, border_latitude)
 
-    source_vals = np.asarray(source_vals)
-    x_source, y_source, z_source = lon_lat_to_cartesian(source_lons,
-                                                        source_lats)
-    tree = KDTree(list(zip(x_source, y_source, z_source)))
+    # Plot interpolated var_to_plot data onto subplots
+    target_lon, target_lat, target_v = generate_interpolated_data(
+        data, var_to_plot, alt_idx_to_plot)
 
-    # Plot all interpolated data onto figure
-    # Generate target spherical mesh to interpolate to
-    lon_cells = 200
-    lat_cells = 100
-    lon_halfdim = 360 / (2 * lon_cells)
-    lat_halfdim = 180 / (2 * lat_cells)
-    lon_centers = np.linspace(0 + lon_halfdim, 360 - lon_halfdim, lon_cells)
-    lat_centers = np.linspace(-90 + lat_halfdim, 90 - lat_halfdim, lat_cells)
-    target_lon, target_lat = np.meshgrid(lon_centers, lat_centers)
-
-    # Interpolate data to new mesh
-    x_target, y_target, z_target = lon_lat_to_cartesian(target_lon.flatten(),
-                                                        target_lat.flatten())
-    d, inds = tree.query(list(zip(x_target, y_target, z_target)), k=10)
-    w = 1.0 / (d * d)
-    target_v = np.sum(w * source_vals[inds], axis=1) / np.sum(w, axis=1)
-    target_v.shape = target_lon.shape
+    # Apply log to data if desired
+    if args['log']:
+        target_v = np.log10(target_v)
+        mini = np.log10(mini)
+        maxi = np.log10(maxi)
 
     # Plot interpolated data
+    ax_list = [north_ax, south_ax, world_ax]
     plot_kwargs = {
         'vmin': mini,
         'vmax': maxi,
@@ -324,11 +426,13 @@ def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename,
     for ax in ax_list:
         ax.pcolormesh(target_lon, target_lat, target_v, **plot_kwargs)
 
-    # Set subplot extents
-    world_ax.set_global()
-
-    # Limit latitudes of circle plots to >45 degrees N/S
-    set_circle_plot_bounds([north_ax, south_ax], north_proj, 45)
+    # Plot interpolated winds
+    if args['winds'] or args['ions']:
+        world_ax_mesh = generate_spherical_mesh(36, 18)
+        circle_ax_mesh = generate_circular_mesh(36, 18, 45)
+        plot_winds(world_ax, data, alt_idx_to_plot, args, world_ax_mesh)
+        for ax in [north_ax, south_ax]:
+            plot_winds(ax, data, alt_idx_to_plot, args, circle_ax_mesh)
 
     # Add elements affecting all subplots
     for ax in ax_list:
@@ -358,7 +462,8 @@ def plot_all_blocks(data, var_to_plot, alt_idx_to_plot, plot_filename,
 def set_circle_plot_bounds(circle_ax_list, circle_proj, border_latitude):
     border_latitude = abs(border_latitude)
     r_limit = abs(circle_proj.transform_point(
-        90, border_latitude, ccrs.PlateCarree())[0]
+        90 + circle_proj.proj4_params['lon_0'],
+        border_latitude, ccrs.PlateCarree())[0]
     )
     r_extent = r_limit * 1.0001
     circle_bound = mpath.Path.unit_circle()
@@ -422,7 +527,8 @@ def read_all_files(filelist, file_vars=None):
     common_vars = None
     for filename in filelist:
         # Retrieve data
-        data = read_routines.read_blocked_netcdf_file(filename, file_vars)
+        data = read_routines.read_file(filename)
+        data = read_routines.standardize_data(data)
         # Save data to dict, update set of common variables
         files_data[filename] = data
         if common_vars is None:
@@ -441,7 +547,8 @@ def plot_model_block_results():
         return
 
     # Read headers for input files (assumes all files have same header)
-    header = read_routines.read_blocked_netcdf_header(args['filelist'][0])
+    # header = read_routines.read_blocked_netcdf_header(args['filelist'][0])
+    header = read_routines.read_file(args['filelist'][0])
 
     # Output help
     if (len(args['filelist']) == 0 or args['help']):
@@ -492,7 +599,8 @@ def plot_model_block_results():
             mini = var_min[var_to_plot] if var_to_plot in var_min else None
             maxi = var_max[var_to_plot] if var_to_plot in var_max else None
             plot_all_blocks(
-                data, var_to_plot, alt_idx_to_plot, plot_filename, mini, maxi)
+                data, var_to_plot, alt_idx_to_plot,
+                plot_filename, args, mini, maxi)
 
 
 # Needed to run main script as the default executable from the command line

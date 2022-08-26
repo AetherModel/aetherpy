@@ -31,6 +31,17 @@ class DataArray(np.ndarray):
         })
 
 
+def read_file(filename, file_vars=None):
+    file_ext = filename.rsplit('.', 1)[-1]
+    if (file_ext == 'nc'):
+        data = read_blocked_netcdf_file(filename, file_vars)
+    elif (file_ext == 'bin'):
+        data = read_gitm_file(filename, file_vars)
+    else:
+        raise ValueError(f"Invalid file extension {filename}")
+    return data
+
+
 def parse_line_into_int_and_string(line, parse_string=True):
     """Parse a data string into integer and string components.
 
@@ -349,7 +360,10 @@ def read_blocked_netcdf_header(filename):
         header['nlons'] = len(ncfile.dimensions['lon'])
         header['nlats'] = len(ncfile.dimensions['lat'])
         header['nalts'] = len(ncfile.dimensions['z'])
-        header['nblocks'] = len(ncfile.dimensions['block'])
+        if 'block' in ncfile.dimensions:
+            header['nblocks'] = len(ncfile.dimensions['block'])
+        else:
+            header['nblocks'] = 1
 
         # Included for compatibility ('vars' slices time out for some reason)
         header['vars'] = list(ncfile.variables.keys())[1:]
@@ -414,7 +428,8 @@ def read_blocked_netcdf_file(filename, file_vars=None):
         data['nlons'] = len(ncfile.dimensions['lon'])
         data['nlats'] = len(ncfile.dimensions['lat'])
         data['nalts'] = len(ncfile.dimensions['z'])
-        data['nblocks'] = len(ncfile.dimensions['block'])
+        if 'block' in ncfile.dimensions:
+            data['nblocks'] = len(ncfile.dimensions['block'])
 
         # Included for compatibility
         data['vars'] = [var for var in ncfile.variables.keys()
@@ -427,6 +442,34 @@ def read_blocked_netcdf_file(filename, file_vars=None):
 
         data['time'] = epoch_to_datetime(np.array(ncfile.variables['time'])[0])
 
+    return data
+
+
+def standardize_data(data):
+    # Coerce to block-based (4-dimensional) in-place
+    if 'nblocks' not in data:
+        data['nblocks'] = 1
+    for key in data.keys():
+        if isinstance(data[key], np.ndarray) and len(data[key].shape) == 3:
+            data[key] = np.expand_dims(data[key], axis=0)
+    # Change to standardized coordinate variable names
+    standard_name_map = {
+        'Longitude': 'lon',
+        'Latitude': 'lat',
+        'Altitude': 'z',
+        'V!Dn!N(east)': 'Zonal Wind',
+        'V!Dn!N(north)': 'Meridional Wind',
+        'V!Dn!N(up)': 'Vertical Wind',
+        'V!Di!N(east)': 'BulkIon Velocity (Zonal)',
+        'V!Di!N(north)': 'BulkIon Velocity (Meridional)',
+        'V!Di!N(up)': 'BulkIon Velocity (Vertical)'
+    }
+    for key in list(data.keys()):
+        if key in standard_name_map:
+            data[standard_name_map[key]] = data.pop(key)
+    for i, var in enumerate(data['vars']):
+        if var in standard_name_map:
+            data['vars'][i] = standard_name_map[var]
     return data
 
 
@@ -739,11 +782,13 @@ def read_gitm_file(filename, file_vars=None):
         idata_length = ntotal * 8 + 8
 
         # Save the data for the desired variables
-        for ivar in file_vars:
+        for ivar, var in enumerate(data['vars']):
             fin.seek(iheader_length + ivar * idata_length)
             sdata = unpack(end_char + 'l', fin.read(4))[0]
-            data[ivar] = np.array(
+            data[var] = np.array(
                 unpack(end_char + '%id' % (ntotal), fin.read(sdata))).reshape(
                     (data["nlons"], data["nlats"], data["nalts"]), order="F")
+        for var in ['Longitude', 'Latitude']:
+            data[var] = np.degrees(data[var])
 
     return data
