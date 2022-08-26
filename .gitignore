@@ -49,6 +49,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Sample data directories
+_data/
+
 # Translations
 *.mo
 *.pot
@@ -108,6 +111,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# VSCode stuff
+.vscode/
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -125,3 +131,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+*.png

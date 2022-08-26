@@ -190,7 +190,7 @@ def plot_model_results():
             header = read_routines.read_aether_ascii_header(args["filelist"])
             is_gitm = False
         else:
-            header = read_routines.read_aether_header(args["filelist"])
+            header = read_routines.read_aether_headers(args["filelist"])
 
     # If help is requested for a specific file, return it here
     if args['help']:
@@ -443,7 +443,6 @@ def plot_model_results():
     if args['movie'] > 0:
         movie_routines.save_movie(filename, ext=args['ext'],
                                   rate=args['movie'])
-
     return
 
 
